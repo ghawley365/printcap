@@ -51,3 +51,31 @@ func TestAuthSignDeterministic(t *testing.T) {
 		t.Fatal("sign must be deterministic")
 	}
 }
+
+func TestPrivRoundTrip(t *testing.T) {
+	engineID := []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2}
+	auth, _ := authProtocol("SHA-1")
+	// Extend the localized key to 32 bytes (Blumenthal) so AES-192/256 key slices
+	// are valid — mirrors what the pipeline's privKeyFor does before encrypt/decrypt.
+	privKey := extendKey(auth.localize("maplesyrupx", engineID), 32, sha1.New)
+
+	for _, name := range []string{"DES", "AES-128", "AES-192", "AES-256"} {
+		p, ok := privProtocol(name)
+		if !ok {
+			t.Fatalf("unknown priv %s", name)
+		}
+		plain := []byte("scoped-pdu-bytes-padded-to-something-reasonable!")
+		ct, salt, err := p.encrypt(privKey, 1, 100, plain)
+		if err != nil {
+			t.Fatalf("%s encrypt: %v", name, err)
+		}
+		pt, err := p.decrypt(privKey, 1, 100, salt, ct)
+		if err != nil {
+			t.Fatalf("%s decrypt: %v", name, err)
+		}
+		// DES is block-padded; compare the prefix.
+		if string(pt[:len(plain)]) != string(plain) {
+			t.Fatalf("%s round-trip mismatch", name)
+		}
+	}
+}
