@@ -3,12 +3,14 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans. Steps use checkbox (`- [ ]`) syntax.
 >
 > **Staging note (read first):** Full WSD print is a large SOAP stack (WS-Addressing, WS-Discovery, WS-Transfer, WSPrint, MTOM). This plan is **staged**; each stage is independently shippable behind the default-off `-wsd` flag. Foundational stages (SOAP/WS-Addressing codec, WS-Discovery, MTOM) are fully coded and unit-tested; the WSPrint operation bodies are specified against the WSD Print Service schema + a locking test per task. Staging is a deliberate, communicated decision for a subsystem of this size — not hidden placeholders.
+>
+> **Build order: plan #6 of 6 — build LAST, AFTER the mDNS plan** (Task 2.2 reuses `mdns.go`'s multicast-socket discipline: dual-stack bind, graceful degrade on `EADDRINUSE`, goodbye-on-close). If building WSD before mDNS, port that socket discipline inline first.
 
 **Goal:** Make printcap a discoverable, installable WSD printer and receive print jobs over WSPrint, capturing them through the existing sink.
 
 **Architecture:** A WS-Discovery UDP multicast responder + a SOAP HTTP server (default port 3911) dispatching by `wsa:Action` to WS-Transfer `Get` (metadata) and the WSPrint operations; `SendDocument` carries the document as an MTOM/XOP attachment.
 
-**Tech Stack:** Go 1.26 stdlib only — `encoding/xml`, `net/http`, `net` (UDP multicast), `mime`, `mime/multipart`, `crypto/rand` (UUID).
+**Tech Stack:** Go 1.26 stdlib only — `encoding/xml`, `net/http`, `net` (UDP multicast), `mime`, `mime/multipart`, `crypto/sha1` (SHA-1-derived stable device UUID; `crypto/rand` is not needed since the UUID is deterministic).
 
 **References:** WS-Discovery 1.1, WS-Addressing 1.0, WS-Transfer, DPWS 1.1, the WSD/PWG **Print Service** schema, SOAP MTOM/XOP.
 
@@ -47,10 +49,14 @@ func TestDeviceUUIDStable(t *testing.T) {
 - [ ] **Step 3:** Implement:
   - `config.go`: `WSDConf{Enabled bool; Port int; Discovery bool}`, `Config.WSD`,
     defaults `{Enabled:false, Port:3911, Discovery:true}`.
-  - `main.go`: `flag.Bool("wsd", false, "enable the WSD print service")` + override.
+  - `main.go`: `flag.Bool("wsd", false, "enable the WSD print service")`, and add a
+    `case "wsd": cfg.WSD.Enabled = true` arm in the `flag.Visit` switch inside
+    `applyFlagOverrides()`.
   - `wsd.go`: `deviceUUID(host)` = `"urn:uuid:" + uuidV5FromHost(host)` (derive a
     stable UUID from a SHA-1 of host, formatted 8-4-4-4-12); engine start/stop stubs
     `startWSD()`/`(*wsdServer).Close()`.
+    > Note: ideally set the RFC-4122 version (5) and variant bits on the SHA-1
+    > digest; "stable + well-formed" is acceptable for a device EPR if you skip them.
   - `engine.go`: `if cfg.WSD.Enabled { if w := startWSD(); w != nil { e.closers = append(e.closers, w) } }`.
 - [ ] **Step 4:** PASS; `go build ./...` clean.
 - [ ] **Step 5:** Commit `feat(wsd): config, -wsd flag, stable device UUID`.
@@ -106,11 +112,14 @@ func TestSOAPRoundTrip(t *testing.T) {
 **Files:** Create `wsd_discovery.go`, `wsd_discovery_test.go`.
 
 - [ ] **Step 1: Failing test** — feed a WS-Discovery **Probe** SOAP body targeting
-  `Types = wprt:PrintDeviceType` to `handleProbe(env, body)`; assert it returns a
-  **ProbeMatches** containing our EPR (`deviceUUID`) and an `XAddrs` pointing at the
-  SOAP endpoint URL. A Probe for an unrelated type returns no match.
+  `Types = wprt:PrintDeviceType` to `handleProbe([]byte(...))` (single `[]byte`
+  argument); assert it returns a **ProbeMatches** containing our EPR (`deviceUUID`)
+  and an `XAddrs` pointing at the SOAP endpoint URL. A Probe for an unrelated type
+  returns no match.
 
 ```go
+import "bytes"
+
 func TestProbeMatchesPrinter(t *testing.T) {
     cfg = defaultConfig()
     wsdEndpoint = "http://192.0.2.10:3911/wsd"
@@ -118,14 +127,11 @@ func TestProbeMatchesPrinter(t *testing.T) {
     if !matched {
         t.Fatal("printer probe should match")
     }
-    if !containsSub(resp, "ProbeMatches") || !containsSub(resp, wsdEndpoint) {
+    if !bytes.Contains(resp, []byte("ProbeMatches")) || !bytes.Contains(resp, []byte(wsdEndpoint)) {
         t.Fatalf("missing ProbeMatches/XAddrs: %s", resp)
     }
 }
-func containsSub(b []byte, s string) bool { return string(b) != "" && len(s) > 0 && (string(b) == s || indexOf(b, s) >= 0) }
 ```
-
-(Provide `indexOf` as a trivial helper, or use `bytes.Contains` directly.)
 
 - [ ] **Step 2:** Run → FAIL.
 - [ ] **Step 3:** Implement `handleProbe`/`handleResolve` building ProbeMatches/
@@ -139,6 +145,8 @@ func containsSub(b []byte, s string) bool { return string(b) != "" && len(s) > 0
 - [ ] **Step 1:** Implement the multicast socket (`239.255.255.250:3702` v4 /
   `ff02::c:3702` v6 via `net.ListenMulticastUDP`, same discipline/graceful-degrade
   as `mdns.go`): on start send Hello, answer Probe/Resolve, on Close send Bye.
+  See the mDNS plan's multicast responder for the exact socket pattern (dual-stack
+  bind, graceful degrade on `EADDRINUSE`, goodbye-on-close) — reuse it here.
 - [ ] **Step 2:** `go build ./...` clean; the unit logic is covered by 2.1 (multicast
   I/O is exercised in manual acceptance).
 - [ ] **Step 3:** Commit `feat(wsd): WS-Discovery multicast responder`.
@@ -178,6 +186,8 @@ func containsSub(b []byte, s string) bool { return string(b) != "" && len(s) > 0
   returns the root XML and the exact attachment bytes keyed by CID.
 
 ```go
+import "bytes"
+
 func TestExtractMTOM(t *testing.T) {
     ct := `multipart/related; boundary=BND; type="application/xop+xml"; start="<root>"`
     body := "--BND\r\nContent-ID: <root>\r\n\r\n<env><xop:Include href=\"cid:doc\"/></env>\r\n" +
@@ -186,7 +196,7 @@ func TestExtractMTOM(t *testing.T) {
     if err != nil {
         t.Fatal(err)
     }
-    if string(parts["doc"]) != "DOCBYTES" || !containsSub(root, "Include") {
+    if string(parts["doc"]) != "DOCBYTES" || !bytes.Contains(root, []byte("Include")) {
         t.Fatalf("root=%s parts=%v", root, parts)
     }
 }
@@ -205,6 +215,16 @@ func TestExtractMTOM(t *testing.T) {
   (MTOM) to the handler; assert a `job{Protocol:"WSD", JobName, User, DocFormat,
   data}` is captured (stubbed sink) with the attachment bytes, and the SOAP
   responses carry a JobId / success.
+- [ ] **Dispatch keys (deterministic):** the WSD Print Service namespace is
+  `http://schemas.microsoft.com/windows/2006/08/wdp/print` (prefix `wprt`). The
+  canonical `wsa:Action` URIs are `<wprt-namespace>/<OperationName>`, i.e.:
+  - `http://schemas.microsoft.com/windows/2006/08/wdp/print/CreatePrintJobRequest`
+  - `http://schemas.microsoft.com/windows/2006/08/wdp/print/SendDocumentRequest`
+  - `http://schemas.microsoft.com/windows/2006/08/wdp/print/GetPrinterElementsRequest`
+  - `http://schemas.microsoft.com/windows/2006/08/wdp/print/GetJobElementsRequest`
+
+  Use these as the `wsa:Action` dispatch keys. Confirm the exact strings against the
+  WSD Print Service schema before finalizing.
 - [ ] **Step 2–5:** Implement `GetPrinterElements`, `CreatePrintJob` (allocate a
   JobId, read `JobDescription`), `SendDocument` (extract the MTOM doc, build the
   job, `sink.save`), `GetJobElements` (report completed), per the WSD Print Service

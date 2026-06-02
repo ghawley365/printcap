@@ -217,12 +217,13 @@ type transport interface {
 
 ## 7. Failure policies (per target)
 
-- **`best_effort`** — deliver on a goroutine so capture never blocks; on error log
-  `warn` and record `status:"failed"`.
-- **`spool_retry`** — enqueue the transformed payload under
-  `captures/forward-queue/`; a per-target worker retries with `backoff_ms` up to
-  `max_attempts` / `ttl_min`; success/exhaustion logged + recorded. Worker stopped
-  via the engine closer on `Stop()`.
+- **`best_effort`** — deliver synchronously with a bounded timeout; on error log
+  `warn` and record `failed`, never propagate.
+- **`spool_retry`** — enqueue the transformed payload on an **in-memory** retry
+  queue (best-effort, bounded by `max_attempts` and `ttl_min`; **not** persisted
+  across restart); a per-target background worker retries with `backoff_ms` up to
+  those limits; success/exhaustion logged + recorded. Worker stopped via the engine
+  closer on `Stop()`. *(YAGNI: disk persistence of the retry queue is deferred.)*
 - **`block`** — deliver synchronously; on failure `sink.save` returns the error and
   the handler signals upstream (raw closes; LPD withholds final ACK; IPP returns
   `server-error-job-canceled` `0x0508`).
@@ -279,7 +280,9 @@ Component tag `[fwd]`:
 4. LPR and IPP/IPPS targets each deliver to printcap's own server in tests and to a
    real printer in manual acceptance.
 5. Failure policies behave: `block` surfaces an error to the sender; `best_effort`
-   logs and continues; `spool_retry` retries then gives up per limits.
+   delivers synchronously with a bounded timeout, records `failed` on error, and
+   never propagates; `spool_retry` records `queued`, then retries on an in-memory
+   queue (not persisted across restart) and gives up per `max_attempts`/`ttl_min`.
 6. `forward.enabled:false` (default) leaves current behavior byte-identical.
 7. No regression in existing capture; `go vet` clean; no new module dependency
    beyond the standard library.

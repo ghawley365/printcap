@@ -8,6 +8,8 @@
 
 **Tech Stack:** Go 1.26, standard library only. Code-page tables transcribed from the Unicode Consortium IBM mapping files (`https://www.unicode.org/Public/MAPPINGS/VENDORS/MICSFT/EBCDIC/`).
 
+**Build order:** plan #3 of 6 (after Forwarding). It inserts an EBCDIC-decode block into `sink.save`; the Forwarding plan also edits `sink.save` (adds the tee + `error` return). Whichever lands second keeps both edits; the EBCDIC block goes before `store.add`.
+
 ---
 
 ## Shared types (defined across tasks)
@@ -234,7 +236,13 @@ func looksEBCDIC(data []byte) bool {
         if isEBCDICPrintable(b) {
             ebcPrintable++
         }
-        if b >= 0x20 && b <= 0x7e {
+        if b >= 0x20 && b <= 0x7e && b != 0x40 {
+            // Exclude 0x40: it is the EBCDIC space and also ASCII '@'. Counting it
+            // as ASCII-printable lands the letter+space samples exactly on the 50%
+            // boundary (asciiPrintable*100/n == 50, which fails `< 50`) and breaks
+            // detection. With it excluded, a 10-letter + 10-space EBCDIC sample
+            // yields asciiPrintable=0 (EBCDIC letter bytes are all > 0x7e), so the
+            // ASCII-printable share is 0% < 50% and looksEBCDIC returns true.
             asciiPrintable++
         }
     }
@@ -262,6 +270,17 @@ func isEBCDICPrintable(b byte) bool {
     return false
 }
 ```
+
+**Why `b != 0x40` matters:** 0x40 is both the EBCDIC space and ASCII '@', so it
+falls inside `0x20..0x7e`. The Task 2 sample is 10 EBCDIC letters + 10 EBCDIC
+spaces (n=20). The letter bytes (0xC8, 0xC5, 0xD3, 0xD6, 0xE6, 0xD9, 0xC4) are all
+> 0x7e, so they are never ASCII-printable. If 0x40 were counted, the 10 spaces
+would give asciiPrintable=10 → `10*100/20 == 50`, which fails the `< 50` test and
+returns false. Excluding 0x40 gives asciiPrintable=0 → `0 < 50` true, so the
+sample is detected (true). The same exclusion makes the Task 6 auto-detect sample
+(`{0xC8,0xC5,0xD3,0xD3,0xD6, 0x40,0x40,0x40,0x40,0x40}`, 5 letters + 5 spaces)
+yield asciiPrintable=0 and resolve EBCDIC on. The `spaces >= 8%` and
+`ebcPrintable >= 80%` thresholds are unchanged.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -318,12 +337,26 @@ func TestAutoDetectsASA(t *testing.T) {
         t.Fatal("auto should pass non-ASA text through")
     }
 }
+
+func TestMachineCarriageControlRaw(t *testing.T) {
+    // Machine carriage-control runs on RAW EBCDIC bytes (before decode), splitting
+    // on EBCDIC NEL (0x15) records. The first byte of each record is the machine
+    // control code; it is stripped. 0x8B/0x89 (skip-to-channel) insert a form feed.
+    // Record bytes shown are EBCDIC letters A/B (0xC1/0xC2); the FF is the ASCII
+    // \f the function inserts, independent of code page.
+    raw := []byte{0x09, 0xC1, 0x15, 0x8B, 0xC2, 0x15} // 0x09=print+space, 0x8B=skip-to-ch
+    got := convertMachineRaw(raw)
+    want := []byte{0xC1, 0x15, '\f', 0xC2, 0x15}
+    if string(got) != string(want) {
+        t.Fatalf("machine raw got %v want %v", got, want)
+    }
+}
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `go test ./... -run 'TestASA|TestNone|TestAuto' -v`
-Expected: FAIL — `undefined: applyCarriageControl`
+Run: `go test ./... -run 'TestASA|TestNone|TestAuto|TestMachine' -v`
+Expected: FAIL — `undefined: applyCarriageControl` / `undefined: convertMachineRaw`
 
 - [ ] **Step 3: Write the implementation**
 
@@ -332,27 +365,25 @@ package main
 
 import "strings"
 
-// applyCarriageControl converts mainframe carriage-control to plain text.
+// applyCarriageControl converts mainframe carriage-control to plain text. It
+// handles ASA on already-decoded text. NOTE: "machine" carriage-control is NOT
+// handled here — machine (FCFC) codes are raw EBCDIC control bytes that no longer
+// exist after EBCDIC decode (they were mapped through the code page). Machine mode
+// is handled by convertMachineRaw on the RAW bytes BEFORE decode (see sink
+// integration, Task 6 Step 3b). Here:
 //   asa:     first char of each record is the ASA control (' '=single, '0'=double,
 //            '-'=triple, '1'=form feed, '+'=overprint); it is stripped.
-//   machine: first byte is a machine (FCFC) code; common print/skip codes map to
-//            newline/form-feed and are stripped.
-//   none:    returned unchanged.   auto: detect asa, else machine, else none.
+//   none:    returned unchanged.   auto: detect asa, else none.
 func applyCarriageControl(text, mode string) string {
     switch mode {
     case "asa":
         return convertASA(text)
-    case "machine":
-        return convertMachine(text)
     case "auto":
-        switch detectCarriage(text) {
-        case "asa":
+        if detectCarriage(text) == "asa" {
             return convertASA(text)
-        case "machine":
-            return convertMachine(text)
         }
         return text
-    default: // none
+    default: // none (and "machine", which is applied on raw bytes elsewhere)
         return text
     }
 }
@@ -380,23 +411,45 @@ func convertASA(text string) string {
     return b.String()
 }
 
-func convertMachine(text string) string {
-    // Minimal machine carriage-control: strip the first byte of each record and
-    // emit a newline; treat 0x8B/0x89 (skip-to-channel/print-with-skip) as form
-    // feed. Sufficient for capture readability.
-    var b strings.Builder
-    for _, line := range strings.Split(text, "\n") {
-        if line == "" {
+// convertMachineRaw applies machine (FCFC) carriage-control to the RAW EBCDIC
+// byte stream, BEFORE EBCDIC decode. Machine control bytes are raw EBCDIC values
+// (e.g. 0x8B/0x89 skip-to-channel) that would be destroyed by decoding through a
+// code-page table, so this MUST run on the raw bytes. It splits the stream on
+// EBCDIC line delimiters (NEL 0x15 and/or LF 0x25), strips the first (control)
+// byte of each record, and inserts an ASCII form-feed (\f, 0x0C) where the control
+// byte is a skip-to-channel code (0x8B/0x89). The delimiter byte is preserved so
+// the subsequent decodeEBCDIC pass maps it to a newline. Returns the cleaned raw
+// bytes for decode. Minimal but sufficient for capture readability.
+func convertMachineRaw(raw []byte) []byte {
+    out := make([]byte, 0, len(raw))
+    rec := make([]byte, 0, 256)
+    flush := func(delim byte, haveDelim bool) {
+        if len(rec) == 0 && !haveDelim {
+            return
+        }
+        ctrl := byte(0)
+        body := rec
+        if len(rec) > 0 {
+            ctrl, body = rec[0], rec[1:] // strip the control byte
+        }
+        if ctrl == 0x8B || ctrl == 0x89 { // skip-to-channel => form feed
+            out = append(out, '\f')
+        }
+        out = append(out, body...)
+        if haveDelim {
+            out = append(out, delim) // preserve EBCDIC delimiter for decode
+        }
+        rec = rec[:0]
+    }
+    for _, b := range raw {
+        if b == 0x15 || b == 0x25 { // EBCDIC NEL or LF: end of record
+            flush(b, true)
             continue
         }
-        ctrl, rest := line[0], line[1:]
-        if ctrl == 0x8B || ctrl == 0x89 {
-            b.WriteString("\f")
-        }
-        b.WriteString(rest)
-        b.WriteString("\n")
+        rec = append(rec, b)
     }
-    return b.String()
+    flush(0, false) // trailing record without a delimiter
+    return out
 }
 
 func detectCarriage(text string) string {
@@ -422,7 +475,7 @@ func detectCarriage(text string) string {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `go test ./... -run 'TestASA|TestNone|TestAuto' -v`
+Run: `go test ./... -run 'TestASA|TestNone|TestAuto|TestMachine' -v`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -740,8 +793,18 @@ insert:
 
 ```go
     if page, carriage, on := resolveEBCDIC(j, j.data); on {
-        if decoded := decodeEBCDIC(j.data, page); decoded != "" {
-            decoded = applyCarriageControl(decoded, carriage)
+        // Ordering matters. Machine (FCFC) carriage-control is raw EBCDIC control
+        // bytes that decodeEBCDIC would map away through the code-page table, so it
+        // MUST be applied to the raw bytes BEFORE decode. ASA/none/auto operate on
+        // the decoded text and are applied AFTER decode.
+        raw := j.data
+        if carriage == "machine" {
+            raw = convertMachineRaw(raw)
+        }
+        if decoded := decodeEBCDIC(raw, page); decoded != "" {
+            if carriage != "machine" {
+                decoded = applyCarriageControl(decoded, carriage)
+            }
             j.CodePage = page
             if cfg.EBCDIC.DecodedSidecar && cfg.mode() != saveMeta {
                 name := base + "-decoded.txt"
@@ -757,6 +820,12 @@ insert:
         }
     }
 ```
+
+Note: `resolveEBCDIC`/`resolveCarriage` are unchanged — they still return the mode
+string (`asa`/`machine`/`none`/`auto`); the ordering decision lives in `sink.save`.
+For machine mode, carriage-control is consumed on the raw bytes before decode and
+must NOT also be re-applied to the decoded text (`applyCarriageControl` treats
+"machine" as a passthrough anyway, but the explicit guard documents intent).
 
 - [ ] **Step 4: Run the full suite + build + vet**
 
@@ -838,9 +907,25 @@ git commit -m "docs(ebcdic): document mainframe EBCDIC capture and queue default
   §5 decode → Tasks 1–2; §6 carriage → Task 3; §7 LPD fields → Task 5; §8 output →
   Task 6; §9 logging → Task 6; §10 testing → Tasks 1–6; §11 acceptance → Task 8. No gaps.
 - **Type consistency:** `decodeEBCDIC`, `looksEBCDIC`, `applyCarriageControl`,
-  `resolveEBCDIC`, `resolveCarriage`, `controlCarriageHint`, `EBCDICConf`,
-  `QueueDefault`, `LPDOpts.QueueDefaults`, and job fields `Class`/`Title`/`CodePage`/
-  `DecodedAs`/`carriageHint` are used identically across tasks.
+  `convertMachineRaw`, `resolveEBCDIC`, `resolveCarriage`, `controlCarriageHint`,
+  `EBCDICConf`, `QueueDefault`, `LPDOpts.QueueDefaults`, and job fields
+  `Class`/`Title`/`CodePage`/`DecodedAs`/`carriageHint` are used identically across
+  tasks. Note `applyCarriageControl` handles only asa/none/auto on decoded text;
+  machine mode uses `convertMachineRaw([]byte) []byte` on raw bytes.
+- **looksEBCDIC fix (Task 2):** the ASCII-printable tally excludes 0x40
+  (`b != 0x40`). 0x40 is both the EBCDIC space and ASCII '@', so counting it put
+  the letter+space test samples exactly on the `asciiPrintable*100/n < 50` boundary
+  (==50, fails `<`) and returned false against tests that assert true. With it
+  excluded, the Task 2 sample (10 letters + 10 spaces) and the Task 6 auto-detect
+  sample both yield asciiPrintable=0 → detected true. The `spaces >= 8%` /
+  `ebcPrintable >= 80%` thresholds are unchanged.
+- **Machine carriage-control reordering (Tasks 3 & 6):** machine (FCFC) control
+  bytes are raw EBCDIC values destroyed by decode, so machine mode is applied to
+  the RAW bytes via `convertMachineRaw` BEFORE `decodeEBCDIC` (splitting on EBCDIC
+  delimiters 0x15/0x25, stripping the per-record control byte, inserting `\f` for
+  0x8B/0x89). ASA/none stay after decode. `sink.save` branches on
+  `carriage == "machine"` to pick the order; `resolveEBCDIC`/`resolveCarriage` are
+  unchanged.
 - **Placeholder note:** the only "fill-in" is bulk *data* — the six `[256]rune`
   tables — sourced from the named Unicode mapping files and locked by anchor tests.
   This is data transcription, not logic left unspecified.

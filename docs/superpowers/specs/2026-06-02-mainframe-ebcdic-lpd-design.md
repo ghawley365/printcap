@@ -32,8 +32,9 @@ beyond the hand-rolled common set (extend later if needed).
   (France).
 - **Output:** keep the raw spool **and** write a UTF-8 `<base>-decoded.txt`
   sidecar.
-- **Richer LPD:** capture more control-file fields (C/T/N and format letters);
-  convert ASA/machine carriage-control; support per-queue defaults.
+- **Richer LPD:** capture more control-file fields (C class, T title) and use the
+  FORTRAN `r` format letter as a carriage-control hint; convert ASA/machine
+  carriage-control; support per-queue defaults.
 
 ## 3. Architecture
 
@@ -135,10 +136,14 @@ Carriage control runs **after** EBCDIC decode (it operates on decoded text).
 ## 7. Richer LPD control-file parsing (`lpd.go`)
 
 `parseControlFile` extends to capture, in addition to `H`/`P`/`J`:
-- `C` → `job.Class`, `T` → `job.Title`, `N` → data-file name (informational),
-  and the format/print letters (`f` formatted, `l` leave-control, `o` PostScript,
-  `p` pr-format, `r` FORTRAN-carriage) recorded as a hint used to default the
-  carriage-control mode (e.g. `r` ⇒ ASA) when the queue doesn't specify one.
+
+- `C` → `job.Class` and `T` → `job.Title`, plus the FORTRAN carriage-control format
+  letter `r`, recorded as a hint used to default the carriage-control mode
+  (`r` ⇒ ASA) when the queue doesn't specify one.
+
+**Out of scope (phase 1):** the `N` data-file-name field and the other format/print
+letters (`f` formatted, `l` leave-control, `o` PostScript, `p` pr-format) are not
+captured. Only `r` is interpreted, and only as a carriage-control hint.
 
 Per-queue defaults are looked up by `j.Queue` at job completion and stored on the
 job so `sink.save` can resolve them without re-reading config.
@@ -166,8 +171,8 @@ control.
   for a PDF/PCL binary.
 - **Carriage control:** ASA single/double/triple/formfeed/overprint; machine
   codes; `auto` selection; `none` passthrough.
-- **Control file:** parsing `C`/`T`/`N`/format letters; format letter → default
-  carriage mode.
+- **Control file:** parsing `C`/`T`; the `r` format letter → ASA carriage hint
+  (`f` and other letters yield no hint).
 - **Resolution:** queue glob match wins over auto-detect; unknown code page →
   skip + warn.
 - **Sink integration:** an EBCDIC job on a mapped queue yields raw + `-decoded.txt`

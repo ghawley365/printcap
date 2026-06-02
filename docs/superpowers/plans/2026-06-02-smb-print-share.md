@@ -4,6 +4,8 @@
 >
 > **Staging note (read first):** A full SMB2/3 server + NTLMv2 + DCERPC/spoolss is a large, protocol-dense subsystem. This plan is organized into **stages**, each independently shippable and testable. Foundational stages (framing, NTLMv2) carry complete code TDD-anchored on published vectors. Deeper protocol stages (SMB2 commands, DCERPC, spoolss) specify the exact wire structures, the `[MS-SMB2]`/`[MS-RPCE]`/`[MS-RPRN]` sections, and the locking test for each task — the implementer fills the message bodies from those normative references. This staging is a deliberate, communicated decision (the subsystem is too large for a single fully-inlined codebase), **not** hidden placeholders.
 
+**Build order:** plan #5 of 6 — build AFTER SNMPv3 (which creates `redactedConfig()`) and after Mainframe/Forwarding. Default-off, experimental.
+
 **Goal:** Receive and capture a print job delivered over SMB to a printer share, modeling SMB2/3 + NTLMv2 + spoolss, on a configurable non-445 port, default-off/experimental.
 
 **Architecture:** Per-connection state machine over Direct-TCP framing; NEGOTIATE → SESSION_SETUP (NTLMv2) → TREE_CONNECT(IPC$) → CREATE/WRITE/READ on `\spoolss` → DCERPC bind → MS-RPRN job sequence → `sink.save`.
@@ -64,8 +66,21 @@ func TestSMBDefaultsAndRedaction(t *testing.T) {
         Users       []SMBUser `json:"users"`
     }
     ```
-  - `dashboard.go`: extend `redactedConfig()` to blank `SMB.Users[i].Password`.
-  - `main.go`: `flag.Bool("smb", false, "enable the experimental SMB print share")` + override case.
+  - `dashboard.go`: ensure a `redactedConfig()` helper exists, then extend it to
+    blank `SMB.Users[i].Password`.
+    - **If the SNMPv3 plan (build #1) already created `redactedConfig()`, just
+      extend it; otherwise create it here.** On `main` today there is NO
+      `redactedConfig()` — redaction is inline in `apiConfig` (dashboard.go ~108–118).
+      If absent, CREATE it by extracting that inline body into
+      `func redactedConfig() *Config` (copy `cfg`, redact `SNMP.Community` to `"***"`,
+      blank `TLS.CertFile`/`TLS.KeyFile`) and change `apiConfig` to
+      `writeJSON(w, redactedConfig())`.
+    - THEN extend `redactedConfig()` to also blank `SMB.Users[i].Password` for each
+      configured user.
+  - `main.go`: add `flag.Bool("smb", false, "enable the experimental SMB print share")`.
+    The existing override switch (`applyFlagOverrides`) keys port flags through
+    `atoiDefault` (Int values); `-smb` is a **bool**, so add a distinct arm:
+    `case "smb": cfg.SMB.Enabled = true`.
   - `engine.go`: in `Start()`, `if cfg.SMB.Enabled { addTCP("SMB", cfg.SMB.Port, serveSMB) }`.
   - `smb.go`: stub `func serveSMB(ln net.Listener) { for { c, err := ln.Accept(); if err != nil { return }; go handleSMBConn(c) } }` and `func handleSMBConn(c net.Conn) { defer c.Close() }` (filled in later stages).
 - [ ] **Step 4:** `go test ./... -run TestSMBDefaults -v && go build ./...` → PASS/clean.
@@ -216,11 +231,12 @@ func TestNTOWFv2_Vector(t *testing.T) {
   `RpcWritePrinter`("PCL"×N)→`RpcEndDocPrinter`→`RpcClosePrinter`; assert a `job`
   is produced with `Protocol:"SMB"`, `JobName:"Report"`, concatenated bytes, and
   passed to a stubbed sink.
-- [ ] **Step 2–5:** Implement the NDR-decoded opnums from `[MS-RPRN]`
-  (OpenPrinterEx=69 or RpcOpenPrinter=1, StartDocPrinter=17, WritePrinter=19,
-  EndDocPrinter=23, ClosePrinter=29 — confirm opnums against `[MS-RPRN]` §3.1.4);
-  accumulate WritePrinter buffers; on EndDocPrinter build the `job` and call
-  `sink.save`. Commit `feat(smb): MS-RPRN job capture into sink`.
+- [ ] **Step 2–5:** Implement the NDR-decoded opnums from `[MS-RPRN]`. Canonical
+  opnum numbers: `RpcOpenPrinter=1`, `RpcStartDocPrinter=17`, `RpcWritePrinter=19`,
+  `RpcEndDocPrinter=23`, `RpcClosePrinter=29`, `RpcOpenPrinterEx=69` (per `[MS-RPRN]`
+  — verify against §3.1.4 during implementation; the integration test backstops a
+  wrong number). Accumulate WritePrinter buffers; on EndDocPrinter build the `job`
+  and call `sink.save`. Commit `feat(smb): MS-RPRN job capture into sink`.
 
 ### Task 4.4: Wire the connection state machine (`smb.go`)
 

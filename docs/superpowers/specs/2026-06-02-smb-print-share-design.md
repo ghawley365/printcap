@@ -142,7 +142,7 @@ material or session keys.
 4. Captured SMB jobs flow through PDL detection, save modes, dashboard, and
    forwarding like any other protocol.
 5. `/api/config` redacts SMB user passwords.
-6. No new module dependency (stdlib crypto/xml only); default-off; clearly
+6. No new module dependency (stdlib crypto only, no XML); default-off; clearly
    documented as experimental and non-445.
 
 ## 10. Out of scope (YAGNI)

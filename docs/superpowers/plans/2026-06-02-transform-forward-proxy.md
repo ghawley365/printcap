@@ -6,6 +6,8 @@
 
 **Architecture:** A `forwarder` built at engine start hooks into `sink.save` (the single capture chokepoint). It evaluates per-target routing conditions, runs each matching target's transform pipeline over a copy of the original bytes, captures the transformed output, and delivers via a pluggable `transport` (raw/LPR/IPP). Failure handling is per target (best-effort/spool-retry/block); `block` propagates an error back through `sink.save` to the inbound handler.
 
+**Build order:** this is plan #2 of 6; build AFTER SNMPv3. It changes `sink.save` to return `error`; the Mainframe plan also edits `sink.save` — whichever lands second keeps both edits.
+
 **Tech Stack:** Go 1.26, standard library only (`net`, `net/http`, `crypto/tls`, `regexp`, `encoding/hex`, `bytes`, `testing`). Reuses the IPP attribute encoders already in `ipp.go`.
 
 ---
@@ -1139,7 +1141,6 @@ package main
 import (
     "strings"
     "testing"
-    "time"
 )
 
 // fakeTransport records sends and can be made to fail.
@@ -1226,8 +1227,11 @@ func TestForwarderBestEffortSwallowsError(t *testing.T) {
     if err := fw.forward(j, []byte("X")); err != nil {
         t.Fatalf("best_effort must not return an error, got %v", err)
     }
-    // best_effort delivers on a goroutine; allow it to record the result.
-    time.Sleep(50 * time.Millisecond)
+    // best_effort is now synchronous: the real (failed) outcome is recorded
+    // before forward() returns, so no sleep is needed.
+    if len(j.Forwards) != 1 || j.Forwards[0].Status != "failed" {
+        t.Fatalf("best_effort should record a failed status; forwards=%+v", j.Forwards)
+    }
 }
 
 var errForward = func() error { return errString("boom") }()
@@ -1315,6 +1319,7 @@ type forwarder struct {
     macros  map[string][]byte
     targets []*target
     wg      sync.WaitGroup
+    done    chan struct{} // closed by Close() to release in-flight retry workers
 }
 
 // knownTransports maps a transport name to its implementation. lpr/ipp/ipps are
@@ -1334,7 +1339,7 @@ func transportFor(name string) (transport, bool) {
 // newForwarder compiles config into runtime targets. Bad targets/rules are
 // logged and skipped, never fatal.
 func newForwarder(c ForwardConf) (*forwarder, error) {
-    f := &forwarder{capture: orElse(c.Capture, "both"), macros: map[string][]byte{}}
+    f := &forwarder{capture: orElse(c.Capture, "both"), macros: map[string][]byte{}, done: make(chan struct{})}
     for name, raw := range c.Macros {
         f.macros[name] = decodeBytes(raw, nil)
     }
@@ -1370,13 +1375,15 @@ func (f *forwarder) compileSteps(in []TransformStep) ([]compiledStep, error) {
     var out []compiledStep
     for _, s := range in {
         cs := compiledStep{kind: s.Type, mode: s.Mode, all: s.All}
-        if s.When != (ForwardCond{}) {
-            cond, err := compileCond(s.When)
-            if err != nil {
-                return nil, fmt.Errorf("transform when: %w", err)
-            }
-            cs.when = cond
+        // ForwardCond contains slices and is not comparable, so we cannot guard
+        // with `s.When != (ForwardCond{})`. Always compile: compileCond returns a
+        // non-nil *compiledCond whose matches() already returns true for an empty
+        // condition, so an always-apply step still works.
+        cond, err := compileCond(s.When)
+        if err != nil {
+            return nil, fmt.Errorf("transform when: %w", err)
         }
+        cs.when = cond
         switch s.Type {
         case "inject_prefix", "inject_suffix":
             cs.data = decodeBytes(s.Data, f.macros)
@@ -1429,8 +1436,13 @@ func (f *forwarder) forward(j *job, original []byte) error {
     return blockErr
 }
 
-// deliver applies the target's failure policy. best_effort/spool_retry never
-// return an error; block delivers synchronously and returns it.
+// deliver applies the target's failure policy.
+//   - best_effort: deliver SYNCHRONOUSLY (bounded by the target timeout), record
+//     the real outcome ("ok"/"failed"), but swallow the error (return nil).
+//   - block: deliver synchronously, record the real status, and return the error.
+//   - spool_retry: record "queued" synchronously, then hand off to a background
+//     worker for retries. The worker MUST NOT touch j.Forwards after this returns
+//     (it only logs), avoiding a data race with sink.save's JSON marshal.
 func (f *forwarder) deliver(t *target, data []byte, j *job) error {
     record := func(status string, err error) {
         res := forwardResult{Target: t.name, Transport: t.transport, Address: t.address,
@@ -1451,27 +1463,34 @@ func (f *forwarder) deliver(t *target, data []byte, j *job) error {
         record("ok", nil)
         return nil
     case "spool_retry":
+        // Record synchronously, then retry in the background. Clone the job
+        // metadata the worker needs so it never reads/writes the live *job after
+        // this function returns.
         record("queued", nil)
+        rj := &job{Host: j.Host, User: j.User, JobName: j.JobName, Queue: j.Queue}
+        payload := append([]byte{}, data...)
         f.wg.Add(1)
-        go func() { defer f.wg.Done(); f.retryLoop(t, data) }()
+        go func() { defer f.wg.Done(); f.retryLoop(t, payload, rj) }()
         return nil
     default: // best_effort
-        f.wg.Add(1)
-        go func() {
-            defer f.wg.Done()
-            if err := t.send.send(t, data, j); err != nil {
-                logWarn("fwd", "target %q: forward failed (best_effort): %v", t.name, err)
-            } else {
-                logInfo("fwd", "forwarded %d bytes to %q", len(data), t.name)
-            }
-        }()
-        record("ok", nil) // recorded as dispatched; async outcome only logged
+        // Synchronous within deliver() (bounded by the transport timeout). Record
+        // the real outcome but never propagate the error.
+        if err := t.send.send(t, data, j); err != nil {
+            logWarn("fwd", "target %q: forward failed (best_effort): %v", t.name, err)
+            record("failed", err)
+        } else {
+            logInfo("fwd", "forwarded %d bytes to %q", len(data), t.name)
+            record("ok", nil)
+        }
         return nil
     }
 }
 
-// retryLoop attempts delivery with backoff up to the configured limits.
-func (f *forwarder) retryLoop(t *target, data []byte) {
+// retryLoop attempts delivery with backoff up to the configured limits. It stops
+// once max_attempts is reached OR the ttl_min wall-clock deadline is exceeded.
+// It carries the real (cloned) job so LPR H/P/J metadata is preserved. During
+// backoff it selects on f.done so Close() can release it promptly.
+func (f *forwarder) retryLoop(t *target, data []byte, j *job) {
     max := t.retry.MaxAttempts
     if max <= 0 {
         max = 3
@@ -1480,20 +1499,40 @@ func (f *forwarder) retryLoop(t *target, data []byte) {
     if backoff <= 0 {
         backoff = 2 * time.Second
     }
+    // ttl_min (minutes) sets a wall-clock deadline; 0 = no TTL bound.
+    var deadline time.Time
+    if t.retry.TTLMin > 0 {
+        deadline = time.Now().Add(time.Duration(t.retry.TTLMin) * time.Minute)
+    }
     for attempt := 1; attempt <= max; attempt++ {
-        if err := t.send.send(t, data, &job{}); err == nil {
+        if !deadline.IsZero() && time.Now().After(deadline) {
+            logErr("fwd", "target %q: TTL (%d min) expired after %d attempt(s)", t.name, t.retry.TTLMin, attempt-1)
+            return
+        }
+        if err := t.send.send(t, data, j); err == nil {
             logInfo("fwd", "target %q: spooled job delivered on attempt %d", t.name, attempt)
             return
         } else {
             logWarn("fwd", "target %q: attempt %d/%d failed: %v", t.name, attempt, max, err)
         }
-        time.Sleep(backoff)
+        // Sleep for the backoff, but wake immediately on shutdown.
+        select {
+        case <-f.done:
+            logWarn("fwd", "target %q: shutdown during retry, abandoning spooled job", t.name)
+            return
+        case <-time.After(backoff):
+        }
     }
     logErr("fwd", "target %q: giving up after %d attempts", t.name, max)
 }
 
-// Close waits for in-flight async/retry deliveries to finish.
+// Close signals in-flight retry workers to stop and waits for them to exit.
+// engine.Stop() calls this while holding e.mu; closing done first ensures any
+// worker mid-backoff returns promptly so wg.Wait() does not hang shutdown.
 func (f *forwarder) Close() error {
+    if f.done != nil {
+        close(f.done)
+    }
     f.wg.Wait()
     return nil
 }
@@ -1904,8 +1943,19 @@ Two targets with different `when` (e.g. one `pdls:["PCL"]`, one
   `transport`. `sink.save` returns `error` consistently in Task 8 and all three handlers.
 - **Placeholder scan:** none — all steps carry concrete code.
 - **Dependency guard:** Task 8 Step 5 asserts `go.mod`/`go.sum` unchanged (stdlib only).
+- **Failure policies:** `best_effort` delivers **synchronously** within `deliver()`
+  (bounded by the transport timeout), records the real outcome (`ok`/`failed`), and
+  swallows the error (returns nil) — no goroutine, no premature `ok`. `block` is
+  synchronous and propagates the error. `spool_retry` is an **in-memory** retry queue:
+  it records `queued` synchronously, then a background worker retries with `backoff_ms`
+  up to `max_attempts` and a `ttl_min` wall-clock deadline. The worker carries a cloned
+  job (preserving LPR H/P/J metadata) and never mutates `j.Forwards` after the
+  synchronous return, avoiding a data race with `sink.save`'s JSON marshal. The retry
+  queue is **not** persisted across restart (YAGNI; disk persistence deferred).
+- **Bounded shutdown:** the forwarder has a `done` channel closed by `Close()`; retry
+  workers select on it during backoff sleeps so `engine.Stop()` (which calls `Close()`
+  while holding `e.mu`) never hangs on a worker mid-backoff.
 - **Known follow-ups (not blockers):** the `-sent` files reuse the original's chosen
   extension even though a transform could change the detected PDL — acceptable for phase 1
-  and noted in docs. best_effort records `status:"ok"` at dispatch time (async outcome only
-  logged), consistent with the spec's "never blocks" intent.
+  and noted in docs.
 ```
