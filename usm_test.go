@@ -24,3 +24,30 @@ func TestPasswordToKey_RFC3414_SHA1(t *testing.T) {
 		t.Fatalf("SHA-1 localized key\n got=%s\nwant=%s", hex.EncodeToString(got), want)
 	}
 }
+
+func TestAuthParamLengths(t *testing.T) {
+	cases := map[string]int{"MD5": 12, "SHA-1": 12, "SHA-256": 24, "SHA-512": 48}
+	engineID, _ := hex.DecodeString("000000000000000000000002")
+	for proto, wantLen := range cases {
+		a, ok := authProtocol(proto)
+		if !ok {
+			t.Fatalf("unknown proto %s", proto)
+		}
+		key := a.localize("maplesyrup", engineID)
+		mac := a.sign(key, []byte("the whole message bytes"))
+		if len(mac) != wantLen {
+			t.Errorf("%s mac len=%d want %d", proto, len(mac), wantLen)
+		}
+	}
+}
+
+func TestAuthSignDeterministic(t *testing.T) {
+	a, _ := authProtocol("SHA-1")
+	engineID := []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2}
+	key := a.localize("maplesyrup", engineID)
+	m1 := a.sign(key, []byte("abc"))
+	m2 := a.sign(key, []byte("abc"))
+	if string(m1) != string(m2) {
+		t.Fatal("sign must be deterministic")
+	}
+}
