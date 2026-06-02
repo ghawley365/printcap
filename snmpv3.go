@@ -1,7 +1,5 @@
 package main
 
-import "encoding/binary"
-
 type v3Message struct {
 	msgID      uint32
 	maxSize    uint32
@@ -150,6 +148,5 @@ func parseUSM(secOct []byte, m *v3Message) bool {
 	m.userName = string(user)
 	m.authParams = ap
 	m.privParams = pp
-	_ = binary.BigEndian
 	return true
 }
