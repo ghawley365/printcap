@@ -1,0 +1,261 @@
+package main
+
+import (
+	"encoding/json"
+	"os"
+	"strconv"
+	"strings"
+)
+
+// atoiDefault parses s as an int, returning def on failure.
+func atoiDefault(s string, def int) int {
+	if n, err := strconv.Atoi(s); err == nil {
+		return n
+	}
+	return def
+}
+
+// saveMode controls what the capture sink persists per job.
+type saveMode int
+
+const (
+	saveBoth saveMode = iota // raw spool file + .json metadata sidecar
+	saveRaw                  // raw spool bytes only
+	saveMeta                 // metadata only, document bytes discarded
+)
+
+// Config is the complete, JSON-serializable configuration for printcap. Every
+// listener and behavior is driven from here. Defaults come from
+// defaultConfig(); a -config file overlays onto them; explicit flags override
+// last. Use -dump-config to write the effective config as a template to edit.
+type Config struct {
+	Bind      string   `json:"bind"`       // interface to bind all listeners to
+	Ports     Ports    `json:"ports"`      // 0 disables a given listener
+	Save      string   `json:"save"`       // both | raw | meta
+	OutDir    string   `json:"out_dir"`    // capture output directory
+	MaxJobMB  int      `json:"max_job_mb"` // per-job byte cap (0 = unlimited)
+	TLS       TLSConf  `json:"tls"`
+	Raw       RawOpts  `json:"raw"`
+	LPD       LPDOpts  `json:"lpd"`
+	IPPOpts   IPPOpts  `json:"ipp_options"`
+	Printer   Printer  `json:"printer"`
+	SNMP      SNMPConf `json:"snmp"`
+	Dashboard DashConf `json:"dashboard"`
+	Log       LogConf  `json:"log"`
+}
+
+// LogConf configures the logging subsystem.
+type LogConf struct {
+	Level      string     `json:"level"`       // error | warn | info | debug | trace
+	File       string     `json:"file"`        // path; empty = printcap.log next to the exe
+	Format     string     `json:"format"`      // text (default) | json — primary file/console rendering
+	JSONFile   string     `json:"json_file"`   // optional separate JSON-lines file (SIEM shippers)
+	MaxSizeMB  int        `json:"max_size_mb"` // rotate the file at this size (default 10)
+	MaxBackups int        `json:"max_backups"` // rotated files to keep (default 5)
+	Console    bool       `json:"console"`     // also write to the console
+	Protocol   bool       `json:"protocol"`    // promote per-connection protocol detail to INFO
+	EventLog   bool       `json:"event_log"`   // also write to the Windows Event Log (service)
+	Syslog     SyslogConf `json:"syslog"`      // ship to a remote syslog server
+}
+
+// SyslogConf ships log records to a remote syslog collector (rsyslog, Graylog,
+// Splunk, etc.).
+type SyslogConf struct {
+	Enabled  bool   `json:"enabled"`
+	Network  string `json:"network"`  // udp | tcp
+	Address  string `json:"address"`  // host:port, e.g. siem.example.com:514
+	Facility int    `json:"facility"` // 0-23; 16 = local0 (default)
+	RFC5424  bool   `json:"rfc5424"`  // true = RFC 5424; false = RFC 3164 (BSD)
+	AppName  string `json:"app_name"` // syslog APP-NAME / tag (default "printcap")
+}
+
+// RawOpts configures the Raw/JetDirect/AppSocket listener.
+type RawOpts struct {
+	ExtraPorts []int `json:"extra_ports"`  // additional raw ports (multi-port servers, e.g. 9101, 9102)
+	ParsePJL   bool  `json:"parse_pjl"`    // extract job name/user from a PJL preamble
+	SplitOnUEL bool  `json:"split_on_uel"` // split multiple jobs on one connection at UEL boundaries
+}
+
+// LPDOpts configures the LPR/LPD listener for broad enterprise compatibility
+// (SAP access-method U, IBM AS/400 RMTOUTQ, z/OS, Linux/CUPS, etc.).
+type LPDOpts struct {
+	AcceptAnyQueue              bool     `json:"accept_any_queue"`               // accept any queue name (default true)
+	AllowedQueues               []string `json:"allowed_queues"`                 // if accept_any_queue is false, only these
+	RequirePrivilegedSourcePort bool     `json:"require_privileged_source_port"` // RFC1179 721-731; default false (permissive)
+	ParsePJL                    bool     `json:"parse_pjl"`                      // also parse PJL from the data file
+}
+
+// IPPOpts configures IPP/IPPS resource paths.
+type IPPOpts struct {
+	ResourcePaths []string `json:"resource_paths"` // advertised printer-uri paths
+	DefaultPath   string   `json:"default_path"`   // primary path in printer-uri-supported
+}
+
+type Ports struct {
+	Raw9100   int `json:"raw9100"`
+	LPR       int `json:"lpr"`
+	IPP       int `json:"ipp"`
+	IPPS      int `json:"ipps"`
+	AutoTLS   int `json:"auto_tls"` // single port: auto-detect TLS vs plaintext IPP
+	Dashboard int `json:"dashboard"`
+	SNMP      int `json:"snmp"`
+}
+
+type TLSConf struct {
+	CertFile string `json:"cert_file"` // empty = generate self-signed in memory
+	KeyFile  string `json:"key_file"`
+}
+
+// Printer holds the identity and capabilities advertised over IPP (and used in
+// SNMP descriptions). Tune these to impersonate a particular device.
+type Printer struct {
+	Name            string   `json:"name"`
+	Info            string   `json:"info"`
+	MakeAndModel    string   `json:"make_and_model"`
+	Location        string   `json:"location"`
+	Serial          string   `json:"serial"`
+	DocumentFormats []string `json:"document_formats"` // MIME types advertised/accepted
+	DefaultFormat   string   `json:"default_format"`
+	EnforceFormats  bool     `json:"enforce_formats"` // reject IPP jobs with other formats
+	Color           bool     `json:"color"`
+	Sides           []string `json:"sides"`       // e.g. one-sided, two-sided-long-edge
+	Resolutions     []int    `json:"resolutions"` // dpi, e.g. 300, 600
+	Media           []string `json:"media"`       // e.g. iso_a4_210x297mm
+}
+
+// SNMPConf drives the built-in SNMP v1/v2c agent that makes the tool
+// discoverable to fleet scanners as a printer.
+type SNMPConf struct {
+	Enabled       bool   `json:"enabled"`
+	Community     string `json:"community"`
+	SysDescr      string `json:"sys_descr"`
+	SysName       string `json:"sys_name"`
+	SysLocation   string `json:"sys_location"`
+	SysContact    string `json:"sys_contact"`
+	SysObjectID   string `json:"sys_object_id"` // dotted OID, vendor identity
+	PageCount     int    `json:"page_count"`
+	TonerLevelPct int    `json:"toner_level_pct"`
+}
+
+type DashConf struct {
+	Enabled bool `json:"enabled"`
+}
+
+func (c *Config) mode() saveMode {
+	switch strings.ToLower(c.Save) {
+	case "raw":
+		return saveRaw
+	case "meta", "metadata":
+		return saveMeta
+	default:
+		return saveBoth
+	}
+}
+
+// defaultConfig returns a sensible, fully-populated configuration: a generic
+// driverless-capable mono printer listening on all standard print ports plus
+// dashboard and SNMP.
+func defaultConfig() *Config {
+	return &Config{
+		Bind: "0.0.0.0",
+		Ports: Ports{
+			Raw9100:   9100,
+			LPR:       515,
+			IPP:       631,
+			IPPS:      6310,
+			AutoTLS:   0,
+			Dashboard: 8631,
+			SNMP:      161,
+		},
+		Save:     "both",
+		OutDir:   "captures",
+		MaxJobMB: 0,
+		Raw: RawOpts{
+			ExtraPorts: []int{},
+			ParsePJL:   true,
+			SplitOnUEL: false,
+		},
+		LPD: LPDOpts{
+			AcceptAnyQueue:              true,
+			AllowedQueues:               []string{},
+			RequirePrivilegedSourcePort: false,
+			ParsePJL:                    true,
+		},
+		IPPOpts: IPPOpts{
+			ResourcePaths: []string{"/ipp/print", "/ipp", "/printers/printcap", "/printer"},
+			DefaultPath:   "/ipp/print",
+		},
+		Printer: Printer{
+			Name:         "printcap",
+			Info:         "printcap capture printer",
+			MakeAndModel: "printcap Virtual MFP",
+			Location:     "lab",
+			Serial:       "PC-0000-0001",
+			DocumentFormats: []string{
+				"application/octet-stream", "application/pdf", "application/postscript",
+				"application/vnd.hp-PCL", "application/vnd.hp-PCLXL", "image/pwg-raster",
+				"image/urf", "image/jpeg", "image/tiff", "application/PCLm",
+				"application/vnd.ms-xpsdocument", "text/plain",
+			},
+			DefaultFormat:  "application/octet-stream",
+			EnforceFormats: false,
+			Color:          true,
+			Sides:          []string{"one-sided", "two-sided-long-edge", "two-sided-short-edge"},
+			Resolutions:    []int{300, 600},
+			Media:          []string{"iso_a4_210x297mm", "na_letter_8.5x11in", "iso_a3_297x420mm"},
+		},
+		SNMP: SNMPConf{
+			Enabled:       true,
+			Community:     "public",
+			SysDescr:      "printcap Virtual MFP; SNMP capture agent",
+			SysName:       "printcap",
+			SysLocation:   "lab",
+			SysContact:    "admin",
+			SysObjectID:   "1.3.6.1.4.1.11.2.3.9.1", // generic; override per vendor
+			PageCount:     0,
+			TonerLevelPct: 100,
+		},
+		Dashboard: DashConf{Enabled: true},
+		Log: LogConf{
+			Level:      "info",
+			File:       "",
+			Format:     "text",
+			JSONFile:   "",
+			MaxSizeMB:  10,
+			MaxBackups: 5,
+			Console:    true,
+			Protocol:   false,
+			EventLog:   true,
+			Syslog: SyslogConf{
+				Enabled:  false,
+				Network:  "udp",
+				Address:  "",
+				Facility: 16, // local0
+				RFC5424:  false,
+				AppName:  "printcap",
+			},
+		},
+	}
+}
+
+// loadConfig overlays a JSON config file onto the current cfg. Only keys
+// present in the file are changed; everything else keeps its default.
+func loadConfig(path string) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(b, cfg)
+}
+
+// dumpConfig writes the effective config as pretty JSON to path (or stdout when
+// path is "-").
+func dumpConfig(path string) error {
+	b, _ := json.MarshalIndent(cfg, "", "  ")
+	b = append(b, '\n')
+	if path == "-" || path == "" {
+		_, err := os.Stdout.Write(b)
+		return err
+	}
+	return os.WriteFile(path, b, 0o644)
+}

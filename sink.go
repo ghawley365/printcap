@@ -1,0 +1,115 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"time"
+)
+
+// captureSink is the single point where every listener hands off a finished
+// job. Centralizing it keeps save-mode, naming, size-capping, logging, and the
+// dashboard feed identical no matter which protocol produced the bytes.
+type captureSink struct {
+	dir string
+}
+
+var unsafeName = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
+
+// extForFormat detects the page-description language of the job (recording it on
+// j.PDL) and returns the matching file extension. The advertised IPP
+// document-format is preferred when it clearly implies a type; otherwise the
+// spool bytes are sniffed (seeing through any PJL preamble).
+func extForFormat(j *job) string {
+	name, ext, _ := detectPDL(j.data)
+	j.PDL = name
+	// If IPP told us the format and detection was inconclusive, honor the hint.
+	if name == "Unknown" || name == "Text" {
+		f := strings.ToLower(j.DocFormat)
+		switch {
+		case strings.Contains(f, "pdf"):
+			j.PDL, ext = "PDF", ".pdf"
+		case strings.Contains(f, "postscript"):
+			j.PDL, ext = "PostScript", ".ps"
+		case strings.Contains(f, "pwg-raster"):
+			j.PDL, ext = "PWG Raster", ".pwg"
+		case strings.Contains(f, "urf"):
+			j.PDL, ext = "Apple Raster (URF)", ".urf"
+		case strings.Contains(f, "pclxl"):
+			j.PDL, ext = "PCL-XL (PCL6)", ".pclxl"
+		case strings.Contains(f, "pcl"):
+			j.PDL, ext = "PCL", ".pcl"
+		case strings.Contains(f, "jpeg"):
+			j.PDL, ext = "JPEG", ".jpg"
+		}
+	}
+	return ext
+}
+
+// save persists the job per the configured save mode, records it for the
+// dashboard, and logs a one-line summary.
+func (s *captureSink) save(j *job) {
+	// Enforce per-job byte cap (0 = unlimited) before touching disk/memory.
+	if cfg.MaxJobMB > 0 {
+		if cap := cfg.MaxJobMB * 1024 * 1024; len(j.data) > cap {
+			j.data = j.data[:cap]
+			j.Bytes = cap
+		}
+	}
+
+	j.ID = nextSeq()
+	if j.Received == "" {
+		j.Received = time.Now().Format(time.RFC3339)
+	}
+
+	// Detect the PDL and pick an extension up front so it's recorded even in
+	// metadata-only mode (where no spool file is written).
+	ext := extForFormat(j)
+
+	stamp := time.Now().Format("20060102-150405")
+	base := fmt.Sprintf("%s-%04d-%s", stamp, j.ID, j.Protocol)
+	if j.JobName != "" {
+		base += "-" + unsafeName.ReplaceAllString(j.JobName, "_")
+	}
+	if len(base) > 120 {
+		base = base[:120]
+	}
+
+	mode := cfg.mode()
+	if mode != saveMeta && len(j.data) > 0 {
+		name := base + ext
+		if err := os.WriteFile(filepath.Join(s.dir, name), j.data, 0o644); err != nil {
+			logErr(j.Protocol, "failed to write spool data: %v", err)
+		} else {
+			j.SavedAs = name
+			logDebug(j.Protocol, "wrote spool file %s (%d bytes)", name, j.Bytes)
+		}
+	}
+	if mode != saveRaw {
+		b, _ := json.MarshalIndent(j, "", "  ")
+		if err := os.WriteFile(filepath.Join(s.dir, base+".json"), b, 0o644); err != nil {
+			logErr(j.Protocol, "failed to write metadata: %v", err)
+		}
+	}
+
+	store.add(j)
+	logInfo(j.Protocol, "captured %d bytes from %s user=%s job=%q queue=%s pdl=%s -> %s",
+		j.Bytes, j.Source, orQ(j.User), j.JobName, orQ(j.Queue), orQ(j.PDL), orElse(j.SavedAs, "(meta only)"))
+}
+
+func orQ(s string) string { return orElse(s, "?") }
+func orElse(s, alt string) string {
+	if s == "" {
+		return alt
+	}
+	return s
+}
+
+// newJob builds a job stamped with the current time, consistent across every
+// protocol path.
+func newJob(proto, source string) *job {
+	return &job{Protocol: proto, Source: source, Received: time.Now().Format(time.RFC3339)}
+}

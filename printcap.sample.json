@@ -1,0 +1,110 @@
+{
+  "bind": "0.0.0.0",
+  "ports": {
+    "raw9100": 9100,
+    "lpr": 515,
+    "ipp": 631,
+    "ipps": 6310,
+    "auto_tls": 0,
+    "dashboard": 8631,
+    "snmp": 161
+  },
+  "save": "both",
+  "out_dir": "captures",
+  "max_job_mb": 0,
+  "tls": {
+    "cert_file": "",
+    "key_file": ""
+  },
+  "raw": {
+    "extra_ports": [],
+    "parse_pjl": true,
+    "split_on_uel": false
+  },
+  "lpd": {
+    "accept_any_queue": true,
+    "allowed_queues": [],
+    "require_privileged_source_port": false,
+    "parse_pjl": true
+  },
+  "ipp_options": {
+    "resource_paths": [
+      "/ipp/print",
+      "/ipp",
+      "/printers/printcap",
+      "/printer"
+    ],
+    "default_path": "/ipp/print"
+  },
+  "printer": {
+    "name": "printcap",
+    "info": "printcap capture printer",
+    "make_and_model": "printcap Virtual MFP",
+    "location": "lab",
+    "serial": "PC-0000-0001",
+    "document_formats": [
+      "application/octet-stream",
+      "application/pdf",
+      "application/postscript",
+      "application/vnd.hp-PCL",
+      "application/vnd.hp-PCLXL",
+      "image/pwg-raster",
+      "image/urf",
+      "image/jpeg",
+      "image/tiff",
+      "application/PCLm",
+      "application/vnd.ms-xpsdocument",
+      "text/plain"
+    ],
+    "default_format": "application/octet-stream",
+    "enforce_formats": false,
+    "color": true,
+    "sides": [
+      "one-sided",
+      "two-sided-long-edge",
+      "two-sided-short-edge"
+    ],
+    "resolutions": [
+      300,
+      600
+    ],
+    "media": [
+      "iso_a4_210x297mm",
+      "na_letter_8.5x11in",
+      "iso_a3_297x420mm"
+    ]
+  },
+  "snmp": {
+    "enabled": true,
+    "community": "public",
+    "sys_descr": "printcap Virtual MFP; SNMP capture agent",
+    "sys_name": "printcap",
+    "sys_location": "lab",
+    "sys_contact": "admin",
+    "sys_object_id": "1.3.6.1.4.1.11.2.3.9.1",
+    "page_count": 0,
+    "toner_level_pct": 100
+  },
+  "dashboard": {
+    "enabled": true
+  },
+  "log": {
+    "level": "info",
+    "file": "",
+    "format": "text",
+    "json_file": "",
+    "max_size_mb": 10,
+    "max_backups": 5,
+    "console": true,
+    "protocol": false,
+    "event_log": true,
+    "syslog": {
+      "enabled": false,
+      "network": "udp",
+      "address": "",
+      "facility": 16,
+      "rfc5424": false,
+      "app_name": "printcap"
+    }
+  }
+}
