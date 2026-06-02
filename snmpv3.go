@@ -1,5 +1,24 @@
 package main
 
+import (
+	"crypto/rand"
+	"crypto/sha1"
+)
+
+// generateEngineID builds an RFC 3411 "new format" engine ID: high bit set,
+// enterprise number (placeholder 0x00000C5A), format 0x05 (octets), then a
+// host-derived suffix.
+func generateEngineID(host string) []byte {
+	id := []byte{0x80, 0x00, 0x0C, 0x5A, 0x05}
+	sum := sha1.Sum([]byte(host))
+	suffix := sum[:11]
+	r := make([]byte, 1)
+	_, _ = rand.Read(r)
+	id = append(id, suffix...)
+	id = append(id, r...)
+	return id
+}
+
 type v3Message struct {
 	msgID      uint32
 	maxSize    uint32

@@ -108,13 +108,33 @@ func apiJobs(w http.ResponseWriter, r *http.Request) {
 func apiConfig(w http.ResponseWriter, r *http.Request) {
 	// Return a copy with secrets redacted — the dashboard is unauthenticated,
 	// so it must not leak the SNMP community string or key material paths.
+	writeJSON(w, redactedConfig())
+}
+
+// redactedConfig returns a shallow copy of the active config with all secret
+// material removed: the SNMP community string, SNMPv3 USM passphrases, and TLS
+// key/cert file paths. Safe to expose over the unauthenticated dashboard.
+func redactedConfig() *Config {
 	c := *cfg
 	if c.SNMP.Community != "" {
 		c.SNMP.Community = "***"
 	}
+	if len(c.SNMP.Users) > 0 {
+		us := make([]SNMPUser, len(c.SNMP.Users))
+		copy(us, c.SNMP.Users)
+		for i := range us {
+			if us[i].AuthPass != "" {
+				us[i].AuthPass = "***"
+			}
+			if us[i].PrivPass != "" {
+				us[i].PrivPass = "***"
+			}
+		}
+		c.SNMP.Users = us
+	}
 	c.TLS.CertFile = ""
 	c.TLS.KeyFile = ""
-	writeJSON(w, &c)
+	return &c
 }
 
 // apiJobData streams a captured spool file back to the browser as a download.

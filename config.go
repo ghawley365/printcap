@@ -135,6 +135,21 @@ type SNMPConf struct {
 	SysObjectID   string `json:"sys_object_id"` // dotted OID, vendor identity
 	PageCount     int    `json:"page_count"`
 	TonerLevelPct int    `json:"toner_level_pct"`
+
+	V3Enabled  bool       `json:"v3_enabled"`
+	AllowV1V2c bool       `json:"allow_v1v2c"`
+	EngineID   string     `json:"engine_id"`
+	Users      []SNMPUser `json:"users"`
+}
+
+// SNMPUser is a single SNMPv3 USM user definition.
+type SNMPUser struct {
+	Name         string `json:"name"`
+	Level        string `json:"level"`         // noAuthNoPriv | authNoPriv | authPriv
+	AuthProtocol string `json:"auth_protocol"` // MD5 | SHA-1 | SHA-256 | SHA-512
+	AuthPass     string `json:"auth_pass"`
+	PrivProtocol string `json:"priv_protocol"` // DES | AES-128 | AES-192 | AES-256
+	PrivPass     string `json:"priv_pass"`
 }
 
 type DashConf struct {
@@ -214,6 +229,9 @@ func defaultConfig() *Config {
 			SysObjectID:   "1.3.6.1.4.1.11.2.3.9.1", // generic; override per vendor
 			PageCount:     0,
 			TonerLevelPct: 100,
+			V3Enabled:     false,
+			AllowV1V2c:    true,
+			Users:         []SNMPUser{},
 		},
 		Dashboard: DashConf{Enabled: true},
 		Log: LogConf{
