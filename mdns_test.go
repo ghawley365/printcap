@@ -141,3 +141,24 @@ func TestResponderCloseIdempotent(t *testing.T) {
 		t.Fatalf("second Close: %v", err)
 	}
 }
+
+func TestAnswersForHostQueryFiltersFamily(t *testing.T) {
+	// A direct A query for the host must NOT return AAAA records (RFC 6762:
+	// answer the queried type). ANY still returns both.
+	a := svcAddrs{host: "printcap.local",
+		v4: []net.IP{net.IPv4(192, 168, 1, 50)},
+		v6: []net.IP{net.ParseIP("fe80::1")}}
+	svcs := []service{{instance: "printcap", svcType: "_ipp._tcp", port: 631, txt: []string{"txtvers=1"}}}
+
+	a4 := answersFor(dnsQuestion{name: "printcap.local", qtype: dnsTypeA}, svcs, a)
+	if !hasRecord(a4, "printcap.local", dnsTypeA) {
+		t.Fatal("A query must return the A record")
+	}
+	if hasRecord(a4, "printcap.local", dnsTypeAAAA) {
+		t.Fatal("A query must NOT return AAAA records")
+	}
+	any := answersFor(dnsQuestion{name: "printcap.local", qtype: dnsTypeANY}, svcs, a)
+	if !hasRecord(any, "printcap.local", dnsTypeA) || !hasRecord(any, "printcap.local", dnsTypeAAAA) {
+		t.Fatal("ANY query must return both A and AAAA")
+	}
+}

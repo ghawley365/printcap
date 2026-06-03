@@ -238,8 +238,9 @@ Passphrases are redacted from the dashboard's `/api/config`.
 
 ## Auto-discovery (Bonjour / mDNS)
 
-printcap advertises itself over **mDNS/DNS-SD** so CUPS, macOS, iOS (AirPrint),
-and Windows discover it automatically — no manual IP/port entry. It announces a
+printcap advertises itself over **mDNS/DNS-SD** so CUPS, macOS, and iOS
+(AirPrint) discover it automatically — no manual IP/port entry (Windows needs
+Apple's Bonjour Print Services). It announces a
 service for each enabled listener: `_ipp._tcp` (IPP), `_ipps._tcp` (IPPS),
 `_pdl-datastream._tcp` (raw/9100), and `_printer._tcp` (LPD), plus the
 `_universal` AirPrint sub-type so iPhones list it in the Print sheet.

@@ -27,13 +27,24 @@ func srvAndTxt(s service, a svcAddrs) []dnsRecord {
 	return recs
 }
 
-func hostRecords(a svcAddrs) []dnsRecord {
+// hostRecords returns both address families, for bundling as additionals
+// alongside an SRV/browse answer.
+func hostRecords(a svcAddrs) []dnsRecord { return hostRecordsFor(a, dnsTypeANY) }
+
+// hostRecordsFor returns the host's address records for the queried family only
+// (A, AAAA, or both for ANY), so a direct A query is not answered with AAAA
+// records in the answer section (RFC 6762 — answer the type that was asked).
+func hostRecordsFor(a svcAddrs, qtype uint16) []dnsRecord {
 	var recs []dnsRecord
-	for _, ip := range a.v4 {
-		recs = append(recs, dnsRecord{name: a.host, rtype: dnsTypeA, ttl: ttlHost, flush: true, data: rdataA(ip)})
+	if qtype == dnsTypeA || qtype == dnsTypeANY {
+		for _, ip := range a.v4 {
+			recs = append(recs, dnsRecord{name: a.host, rtype: dnsTypeA, ttl: ttlHost, flush: true, data: rdataA(ip)})
+		}
 	}
-	for _, ip := range a.v6 {
-		recs = append(recs, dnsRecord{name: a.host, rtype: dnsTypeAAAA, ttl: ttlHost, flush: true, data: rdataAAAA(ip)})
+	if qtype == dnsTypeAAAA || qtype == dnsTypeANY {
+		for _, ip := range a.v6 {
+			recs = append(recs, dnsRecord{name: a.host, rtype: dnsTypeAAAA, ttl: ttlHost, flush: true, data: rdataAAAA(ip)})
+		}
 	}
 	return recs
 }
@@ -64,7 +75,7 @@ func answersFor(q dnsQuestion, svcs []service, a svcAddrs) []dnsRecord {
 			out = append(out, dnsRecord{name: s.instanceName(), rtype: dnsTypeTXT, ttl: ttlDNSSD,
 				flush: true, data: rdataTXT(s.txt)})
 		case q.name == a.host && (matchesType(dnsTypeA) || matchesType(dnsTypeAAAA)):
-			out = append(out, hostRecords(a)...)
+			out = append(out, hostRecordsFor(a, q.qtype)...)
 		}
 		for _, sub := range s.subtypes {
 			subName := sub + "._sub." + s.svcType + ".local"

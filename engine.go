@@ -252,12 +252,12 @@ func localAddrs(bind string) (v4, v6 []net.IP) {
 	}
 	for _, a := range addrs {
 		ipNet, ok := a.(*net.IPNet)
-		if !ok || ipNet.IP.IsLoopback() {
-			continue
+		if !ok || ipNet.IP.IsLoopback() || ipNet.IP.IsLinkLocalUnicast() {
+			continue // skip loopback and link-local (v4 APIPA 169.254/16 and v6 fe80::/10)
 		}
 		if ip4 := ipNet.IP.To4(); ip4 != nil {
 			v4 = append(v4, ip4)
-		} else if ipNet.IP.To16() != nil && !ipNet.IP.IsLinkLocalUnicast() {
+		} else if ipNet.IP.To16() != nil {
 			v6 = append(v6, ipNet.IP)
 		}
 	}
