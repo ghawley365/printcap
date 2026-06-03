@@ -4,7 +4,7 @@ import "testing"
 
 func TestDecodeBytesHexEscapes(t *testing.T) {
 	got := decodeBytes(`\x1bE hello\x0a`, nil)
-	want := append([]byte{0x1b, 'E', ' ', 'h', 'e', 'l', 'l', 'o', 0x0a})
+	want := []byte{0x1b, 'E', ' ', 'h', 'e', 'l', 'l', 'o', 0x0a}
 	if string(got) != string(want) {
 		t.Fatalf("got %v want %v", got, want)
 	}
