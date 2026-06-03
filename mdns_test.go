@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"net"
 	"testing"
 )
@@ -64,6 +65,48 @@ func TestUniqueInstance(t *testing.T) {
 	taken["printcap (3)"] = true
 	if got := uniqueInstance("printcap", taken); got != "printcap (4)" {
 		t.Fatalf("got %q, want %q", got, "printcap (4)")
+	}
+}
+
+func TestKnownAnswerSuppression(t *testing.T) {
+	svcs := []service{{instance: "printcap", svcType: "_ipp._tcp", port: 631,
+		txt: []string{"txtvers=1"}}}
+	addrs := sampleAddrs()
+
+	// Build a browse query whose answer section already carries the browse PTR
+	// the querier knows (RFC 6762 §7.1). buildQuery writes the 12-byte header +
+	// one question; we append an answer record and bump ancount.
+	ptr := dnsRecord{name: "_ipp._tcp.local", rtype: dnsTypePTR, ttl: ttlDNSSD,
+		data: rdataPTR("printcap._ipp._tcp.local")}
+	msg := buildQuery("_ipp._tcp.local", dnsTypePTR, false)
+	binary.BigEndian.PutUint16(msg[6:], 1) // ancount = 1
+	msg = append(msg, encodeRR(ptr)...)
+
+	known := knownAnswers(msg)
+	if !hasRecord(known, "_ipp._tcp.local", dnsTypePTR) {
+		t.Fatalf("knownAnswers should return the browse PTR, got %v", recNames(known))
+	}
+
+	// answersFor would normally bundle PTR + SRV + TXT + A. Filtering through
+	// recordKnown must drop the duplicate PTR but keep the rest.
+	recs := answersFor(dnsQuestion{name: "_ipp._tcp.local", qtype: dnsTypePTR}, svcs, addrs)
+	var kept []dnsRecord
+	for _, rec := range recs {
+		if !recordKnown(rec, known) {
+			kept = append(kept, rec)
+		}
+	}
+	if hasRecord(kept, "_ipp._tcp.local", dnsTypePTR) {
+		t.Error("duplicate browse PTR should have been suppressed")
+	}
+	if !hasRecord(kept, "printcap._ipp._tcp.local", dnsTypeSRV) {
+		t.Error("SRV should be kept")
+	}
+	if !hasRecord(kept, "printcap._ipp._tcp.local", dnsTypeTXT) {
+		t.Error("TXT should be kept")
+	}
+	if !hasRecord(kept, "printcap.local", dnsTypeA) {
+		t.Error("A should be kept")
 	}
 }
 
