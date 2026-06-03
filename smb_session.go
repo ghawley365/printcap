@@ -29,6 +29,13 @@ type smbSession struct {
 	authComplete    bool
 	signingRequired bool
 	encryptData     bool
+
+	// Tree-connect and named-pipe state ([MS-SMB2] §2.2.10, §2.2.14). trees
+	// maps an assigned TreeId to its share path; handles maps the hex of an
+	// open FileId to its \spoolss pipe instance.
+	trees      map[uint32]string
+	nextTreeID uint32
+	handles    map[string]*pipeHandle
 }
 
 // SESSION_SETUP request/response structure sizes ([MS-SMB2] §2.2.5, §2.2.6).
@@ -55,7 +62,11 @@ const serverComputerName = "PRINTCAP"
 // newSMBSession allocates a session with a random non-zero SessionId and a
 // zeroed 64-byte preauth-integrity hash.
 func newSMBSession() *smbSession {
-	s := &smbSession{preauth: make([]byte, 64)}
+	s := &smbSession{
+		preauth: make([]byte, 64),
+		trees:   make(map[uint32]string),
+		handles: make(map[string]*pipeHandle),
+	}
 	for {
 		var id [8]byte
 		if _, err := rand.Read(id[:]); err != nil {
