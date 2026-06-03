@@ -51,7 +51,7 @@ func extForFormat(j *job) string {
 
 // save persists the job per the configured save mode, records it for the
 // dashboard, and logs a one-line summary.
-func (s *captureSink) save(j *job) {
+func (s *captureSink) save(j *job) error {
 	// Enforce per-job byte cap (0 = unlimited) before touching disk/memory.
 	if cfg.MaxJobMB > 0 {
 		if cap := cfg.MaxJobMB * 1024 * 1024; len(j.data) > cap {
@@ -77,20 +77,30 @@ func (s *captureSink) save(j *job) {
 	if len(base) > 120 {
 		base = base[:120]
 	}
+	j.captureBase, j.captureExt = base, ext
 
 	mode := cfg.mode()
 	if mode != saveMeta && len(j.data) > 0 {
 		name := base + ext
-		if err := os.WriteFile(filepath.Join(s.dir, name), j.data, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(s.dir, name), j.data, 0o600); err != nil {
 			logErr(j.Protocol, "failed to write spool data: %v", err)
 		} else {
 			j.SavedAs = name
 			logDebug(j.Protocol, "wrote spool file %s (%d bytes)", name, j.Bytes)
 		}
 	}
+
+	// Tee to the forwarder before writing the JSON metadata so j.Forwards is
+	// captured in the .json. The original spool bytes are passed untouched.
+	var fwdErr error
+	if forward != nil {
+		original := append([]byte{}, j.data...)
+		fwdErr = forward.forward(j, original)
+	}
+
 	if mode != saveRaw {
 		b, _ := json.MarshalIndent(j, "", "  ")
-		if err := os.WriteFile(filepath.Join(s.dir, base+".json"), b, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(s.dir, base+".json"), b, 0o600); err != nil {
 			logErr(j.Protocol, "failed to write metadata: %v", err)
 		}
 	}
@@ -98,6 +108,7 @@ func (s *captureSink) save(j *job) {
 	store.add(j)
 	logInfo(j.Protocol, "captured %d bytes from %s user=%s job=%q queue=%s pdl=%s -> %s",
 		j.Bytes, j.Source, orQ(j.User), j.JobName, orQ(j.Queue), orQ(j.PDL), orElse(j.SavedAs, "(meta only)"))
+	return fwdErr
 }
 
 func orQ(s string) string { return orElse(s, "?") }

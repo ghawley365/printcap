@@ -56,6 +56,9 @@ func saveRawStream(proto, src string, data []byte) {
 		}
 		j.data = seg
 		j.Bytes = len(seg)
-		sink.save(j)
+		if err := sink.save(j); err != nil {
+			logWarn(proto, "forward (block) failed, dropping connection: %v", err)
+			return
+		}
 	}
 }

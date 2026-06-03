@@ -94,7 +94,10 @@ func handleLPD(conn net.Conn) {
 				// in sync with the protocol, so save what we have and stop.
 				ackOK(conn)
 				if len(j.data) > 0 {
-					sink.save(j)
+					if err := sink.save(j); err != nil {
+						logWarn("LPR", "forward (block) failed: %v", err)
+						return
+					}
 				}
 				return
 			}
@@ -118,7 +121,10 @@ func handleLPD(conn net.Conn) {
 				j.User = user
 			}
 		}
-		sink.save(j)
+		if err := sink.save(j); err != nil {
+			logWarn("LPR", "forward (block) failed: %v", err)
+			return
+		}
 	}
 }
 

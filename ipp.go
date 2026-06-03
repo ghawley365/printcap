@@ -92,7 +92,10 @@ func ippHandler(w http.ResponseWriter, r *http.Request) {
 		j.DocFormat = docFmt
 		j.data = docData
 		j.Bytes = len(docData)
-		sink.save(j)
+		if err := sink.save(j); err != nil {
+			logWarn(proto, "forward (block) failed: %v", err)
+			status = 0x0508 // server-error-job-canceled
+		}
 	}
 
 	resp := buildIPPResponse(op, status, reqID, r.Host)
