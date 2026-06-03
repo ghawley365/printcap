@@ -2,7 +2,9 @@ package main
 
 import (
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // fakeTransport records sends and can be made to fail.
@@ -97,6 +99,99 @@ var errForward = func() error { return errString("boom") }()
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+// countingTransport fails its first failFirst sends, then succeeds, closing
+// succeeded on the first success. Safe for the concurrent spool_retry worker.
+type countingTransport struct {
+	mu        sync.Mutex
+	calls     int
+	failFirst int
+	succeeded chan struct{}
+}
+
+func (c *countingTransport) send(t *target, data []byte, j *job) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls++
+	if c.calls <= c.failFirst {
+		return errForward
+	}
+	if c.succeeded != nil {
+		close(c.succeeded)
+		c.succeeded = nil
+	}
+	return nil
+}
+
+func (c *countingTransport) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calls
+}
+
+// spool_retry records "queued" synchronously (never blocks the sender), then a
+// background worker retries with backoff until it succeeds.
+func TestForwarderSpoolRetryDeliversThenCloses(t *testing.T) {
+	cfg = defaultConfig()
+	fw, err := newForwarder(ForwardConf{
+		Enabled: true,
+		Targets: []ForwardTarget{{
+			Name: "t1", Transport: "raw", Address: "x", Failure: "spool_retry",
+			Retry: ForwardRetry{MaxAttempts: 5, BackoffMS: 1},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ct := &countingTransport{failFirst: 2, succeeded: make(chan struct{})} // fail twice, succeed on the 3rd
+	fw.targets[0].send = ct
+
+	j := &job{Protocol: "IPP"}
+	if err := fw.forward(j, []byte("X")); err != nil {
+		t.Fatalf("spool_retry must not block/return: %v", err)
+	}
+	if len(j.Forwards) != 1 || j.Forwards[0].Status != "queued" {
+		t.Fatalf("expected a synchronous 'queued' record; forwards=%+v", j.Forwards)
+	}
+
+	// Wait for the background worker to deliver (do NOT Close() first — Close
+	// abandons in-flight retries by design).
+	select {
+	case <-ct.succeeded:
+	case <-time.After(5 * time.Second):
+		t.Fatal("spool_retry worker did not deliver within 5s")
+	}
+	if got := ct.count(); got != 3 {
+		t.Fatalf("expected 3 attempts (2 fail + 1 ok), got %d", got)
+	}
+	fw.Close() // worker already done; Close returns promptly
+}
+
+// Close() must release a worker that is mid-backoff promptly via the done channel,
+// rather than waiting out a long backoff.
+func TestForwarderCloseReleasesRetryWorker(t *testing.T) {
+	cfg = defaultConfig()
+	fw, err := newForwarder(ForwardConf{
+		Enabled: true,
+		Targets: []ForwardTarget{{
+			Name: "t1", Transport: "raw", Address: "x", Failure: "spool_retry",
+			Retry: ForwardRetry{MaxAttempts: 100, BackoffMS: 60000}, // 60s backoff
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fw.targets[0].send = &fakeTransport{failErr: errForward} // always fails → enters backoff
+	_ = fw.forward(&job{Protocol: "IPP"}, []byte("X"))
+
+	done := make(chan struct{})
+	go func() { fw.Close(); close(done) }()
+	select {
+	case <-done: // released despite the 60s backoff
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not release the mid-backoff retry worker within 5s")
+	}
+}
 
 func TestUnknownTransportDisablesTarget(t *testing.T) {
 	cfg = defaultConfig()
