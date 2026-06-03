@@ -387,7 +387,11 @@ func readTLV(b []byte, p int) (tag byte, content []byte, next int, ok bool) {
 	p++
 	if l&0x80 != 0 {
 		n := l & 0x7f
-		if n == 0 || p+n > len(b) {
+		// Reject a length-of-length wider than 4 bytes: it exceeds any real SNMP
+		// PDU and, unchecked, would overflow int below into a negative l that
+		// slips past the p+l bounds test and panics b[p:p+l]. (Reached via a
+		// SNMPv3 scoped PDU that decrypts to garbage, e.g. a wrong priv key.)
+		if n == 0 || n > 4 || p+n > len(b) {
 			return 0, nil, p, false
 		}
 		l = 0
@@ -396,7 +400,7 @@ func readTLV(b []byte, p int) (tag byte, content []byte, next int, ok bool) {
 			p++
 		}
 	}
-	if p+l > len(b) {
+	if l < 0 || p+l > len(b) {
 		return 0, nil, p, false
 	}
 	return tag, b[p : p+l], p + l, true
