@@ -43,6 +43,25 @@ type Config struct {
 	Dashboard DashConf    `json:"dashboard"`
 	Log       LogConf     `json:"log"`
 	Forward   ForwardConf `json:"forward"`
+	EBCDIC    EBCDICConf  `json:"ebcdic"`
+}
+
+// EBCDICConf controls decoding of EBCDIC (mainframe) print streams into a
+// readable sidecar, including code-page selection and carriage-control handling.
+type EBCDICConf struct {
+	Enabled         bool   `json:"enabled"`
+	DefaultCodePage string `json:"default_code_page"` // e.g. "CP037"
+	AutoDetect      bool   `json:"auto_detect"`
+	DecodedSidecar  bool   `json:"decoded_sidecar"`
+	CarriageControl string `json:"carriage_control"` // none|asa|machine|auto
+}
+
+// QueueDefault overrides EBCDIC/code-page/carriage-control settings for LPD
+// queues whose name matches a glob key in LPDOpts.QueueDefaults.
+type QueueDefault struct {
+	CodePage        string `json:"code_page"`
+	CarriageControl string `json:"carriage_control"`
+	EBCDIC          bool   `json:"ebcdic"`
 }
 
 type ForwardConf struct {
@@ -116,6 +135,8 @@ type LPDOpts struct {
 	AllowedQueues               []string `json:"allowed_queues"`                 // if accept_any_queue is false, only these
 	RequirePrivilegedSourcePort bool     `json:"require_privileged_source_port"` // RFC1179 721-731; default false (permissive)
 	ParsePJL                    bool     `json:"parse_pjl"`                      // also parse PJL from the data file
+
+	QueueDefaults map[string]QueueDefault `json:"queue_defaults"` // per-queue (glob) code page / carriage / ebcdic overrides
 }
 
 // IPPOpts configures IPP/IPPS resource paths.
@@ -228,6 +249,7 @@ func defaultConfig() *Config {
 			AllowedQueues:               []string{},
 			RequirePrivilegedSourcePort: false,
 			ParsePJL:                    true,
+			QueueDefaults:               map[string]QueueDefault{},
 		},
 		IPPOpts: IPPOpts{
 			ResourcePaths: []string{"/ipp/print", "/ipp", "/printers/printcap", "/printer"},
@@ -267,6 +289,13 @@ func defaultConfig() *Config {
 			Users:         []SNMPUser{},
 		},
 		Dashboard: DashConf{Enabled: true},
+		EBCDIC: EBCDICConf{
+			Enabled:         true,
+			DefaultCodePage: "CP037",
+			AutoDetect:      true,
+			DecodedSidecar:  true,
+			CarriageControl: "auto",
+		},
 		Forward: ForwardConf{
 			Enabled: false,
 			Capture: "both",

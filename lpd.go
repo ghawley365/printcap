@@ -81,6 +81,7 @@ func handleLPD(conn net.Conn) {
 			r.ReadByte()                                        // trailing 0x00 terminator
 			ackOK(conn)
 			parseControlFile(ctrl, j)
+			j.carriageHint = controlCarriageHint(ctrl)
 			logTrace("LPR", "control file: host=%q user=%q job=%q", j.Host, j.User, j.JobName)
 		case 0x03: // receive data file: "<count> <name>\n"
 			count, _ := parseCountName(readLine(r))
@@ -201,7 +202,8 @@ func parseCountName(s string) (int, string) {
 }
 
 // parseControlFile reads the ASCII control file. Each line begins with a
-// single command letter; we care about H (host), P (user), and J (job name).
+// single command letter; we care about H (host), P (user), J (job name),
+// C (class), and T (title).
 func parseControlFile(ctrl []byte, j *job) {
 	for _, line := range strings.Split(string(ctrl), "\n") {
 		if line == "" {
@@ -215,6 +217,21 @@ func parseControlFile(ctrl []byte, j *job) {
 			j.User = val
 		case 'J':
 			j.JobName = val
+		case 'C':
+			j.Class = val
+		case 'T':
+			j.Title = val
 		}
 	}
+}
+
+// controlCarriageHint returns "asa" when the control file uses the FORTRAN
+// carriage-control print letter ('r'), else "".
+func controlCarriageHint(ctrl []byte) string {
+	for _, line := range strings.Split(string(ctrl), "\n") {
+		if len(line) > 0 && line[0] == 'r' {
+			return "asa"
+		}
+	}
+	return ""
 }

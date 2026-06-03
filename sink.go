@@ -98,6 +98,33 @@ func (s *captureSink) save(j *job) error {
 		fwdErr = forward.forward(j, original)
 	}
 
+	if page, carriage, on := resolveEBCDIC(j, j.data); on {
+		// Machine (FCFC) carriage-control is raw EBCDIC control bytes that decode
+		// would map away, so it MUST run on the raw bytes BEFORE decode. ASA/none/
+		// auto operate on the decoded text, AFTER decode.
+		raw := j.data
+		if carriage == "machine" {
+			raw = convertMachineRaw(raw)
+		}
+		if decoded := decodeEBCDIC(raw, page); decoded != "" {
+			if carriage != "machine" {
+				decoded = applyCarriageControl(decoded, carriage)
+			}
+			j.CodePage = page
+			if cfg.EBCDIC.DecodedSidecar && cfg.mode() != saveMeta {
+				name := base + "-decoded.txt"
+				if err := os.WriteFile(filepath.Join(s.dir, name), []byte(decoded), 0o600); err != nil {
+					logErr(j.Protocol, "failed to write decoded sidecar: %v", err)
+				} else {
+					j.DecodedAs = name
+					logInfo(j.Protocol, "decoded %d bytes as %s (%s) -> %s", j.Bytes, page, carriage, name)
+				}
+			}
+		} else {
+			logWarn(j.Protocol, "EBCDIC decode skipped: unknown code page %q", page)
+		}
+	}
+
 	if mode != saveRaw {
 		b, _ := json.MarshalIndent(j, "", "  ")
 		if err := os.WriteFile(filepath.Join(s.dir, base+".json"), b, 0o600); err != nil {

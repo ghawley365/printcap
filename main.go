@@ -43,13 +43,18 @@ type job struct {
 	Queue     string `json:"queue,omitempty"`           // LPD queue / IPP resource path
 	DocFormat string `json:"document_format,omitempty"` // advertised MIME type (IPP)
 	PDL       string `json:"pdl,omitempty"`             // detected page-description language
+	Class     string `json:"class,omitempty"`
+	Title     string `json:"title,omitempty"`
+	CodePage  string `json:"code_page,omitempty"`
+	DecodedAs string `json:"decoded_as,omitempty"`
 	Bytes     int    `json:"bytes"`
 	SavedAs   string `json:"saved_as,omitempty"`
 	data      []byte // not serialized; written to the raw file instead
 
-	Forwards    []forwardResult `json:"forwards,omitempty"`
-	captureBase string          // set by sink.save (Task 8); base name for -sent files
-	captureExt  string          // set by sink.save (Task 8); chosen extension
+	Forwards     []forwardResult `json:"forwards,omitempty"`
+	captureBase  string          // set by sink.save (Task 8); base name for -sent files
+	captureExt   string          // set by sink.save (Task 8); chosen extension
+	carriageHint string          // control-file carriage-control hint ("asa" or "")
 }
 
 var (

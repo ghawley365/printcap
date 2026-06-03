@@ -268,6 +268,24 @@ condition matches. Transforms are `replace` (literal/regex/hex) and
 
 See `ADMIN_GUIDE.md` for the full config block and examples.
 
+## Mainframe & EBCDIC (z/OS, IBM i / AS-400)
+
+Mainframe and midrange hosts print over LPR/LPD and often send **EBCDIC** data
+with ASA or machine carriage-control. printcap transcodes these to readable UTF-8
+while keeping the raw bytes: it writes a `<base>-decoded.txt` sidecar alongside
+the raw spool.
+
+Configure under `ebcdic` (`enabled`, `default_code_page`, `auto_detect`,
+`decoded_sidecar`, `carriage_control`) and map specific LPD queues under
+`lpd.queue_defaults`, e.g.
+`"mvs*": {"code_page":"CP037","carriage_control":"asa","ebcdic":true}`.
+Resolution order per job: a matching `lpd.queue_defaults` glob → the global
+default when `auto_detect` flags the bytes as EBCDIC → otherwise left raw.
+Built-in code pages: **CP037** (US/Canada), **CP500** (International), **CP1047**
+(Open Systems / z/OS), **CP273** (Germany), **CP285** (UK), **CP297** (France).
+The richer LPD control file also captures Class (`C`) and Title (`T`); a FORTRAN
+carriage-control (`r`) data line hints ASA.
+
 ## How clients reach it
 
 * **Raw/9100** — add a "Standard TCP/IP Port" printer pointing at the host, "Raw", port 9100.
