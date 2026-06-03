@@ -44,6 +44,18 @@ func (e *Engine) Start() (int, error) {
 	sink = &captureSink{dir: cfg.OutDir}
 	store = newJobStore(200)
 
+	if cfg.Forward.Enabled {
+		if fw, err := newForwarder(cfg.Forward); err != nil {
+			e.logf("forward: %v", err)
+		} else {
+			forward = fw
+			e.closers = append(e.closers, fw)
+			logInfo("engine", "forwarding enabled: %d target(s)", len(fw.targets))
+		}
+	} else {
+		forward = nil
+	}
+
 	// Resolve the auto-TLS override on a local copy so we never mutate config.
 	ports := cfg.Ports
 	if ports.AutoTLS > 0 {
