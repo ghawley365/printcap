@@ -315,7 +315,18 @@ field to keep its default.
     "accept_any_queue": true,  // record and accept any queue name
     "allowed_queues": [],      // if accept_any_queue is false, only these
     "require_privileged_source_port": false, // RFC1179 721-731; false = permissive
-    "parse_pjl": true          // fall back to PJL for job name / user
+    "parse_pjl": true,         // fall back to PJL for job name / user
+    "queue_defaults": {         // per-LPD-queue overrides (glob keys)
+      "mvs*": { "code_page": "CP037", "carriage_control": "asa", "ebcdic": true }
+    }
+  },
+
+  "ebcdic": {
+    "enabled": true,            // transcode EBCDIC jobs to a -decoded.txt sidecar
+    "default_code_page": "CP037", // CP037|CP500|CP1047|CP273|CP285|CP297
+    "auto_detect": true,        // heuristically detect unmapped EBCDIC jobs
+    "decoded_sidecar": true,    // write <base>-decoded.txt next to the raw spool
+    "carriage_control": "auto"  // none | asa | machine | auto
   },
 
   "ipp_options": {             // IPP/IPPS resource paths
@@ -480,6 +491,26 @@ field to keep its default.
 * **`tls.cert_file` / `key_file`** — supply a real certificate for IPPS if
   clients validate it. Left blank, printcap mints a fresh in-memory self-signed
   certificate at startup (clients must skip validation).
+* **`ebcdic`** — transcode mainframe/midrange (z/OS, IBM i / AS-400) print jobs
+  from EBCDIC to readable UTF-8. `enabled` is the master switch;
+  `default_code_page` is the fallback when a job has no explicit mapping (one of
+  the six built-ins below); `auto_detect` heuristically flags unmapped jobs as
+  EBCDIC; `decoded_sidecar` writes the decoded text as `<base>-decoded.txt` next
+  to the raw spool; `carriage_control` is `none` | `asa` | `machine` | `auto`
+  (carriage-control interpretation for line printers).
+  * **Built-in code pages** — `CP037` (US/Canada), `CP500` (International),
+    `CP1047` (Open Systems / z/OS), `CP273` (Germany), `CP285` (UK), `CP297`
+    (France).
+  * **`lpd.queue_defaults`** — per-queue overrides keyed by a glob (e.g. `mvs*`),
+    each mapping to `{ code_page, carriage_control, ebcdic }`. **Resolution order
+    per job:** a matching `queue_defaults` glob wins first; otherwise, when
+    `auto_detect` flags the bytes as EBCDIC, the global `default_code_page` is
+    applied; otherwise the job is left raw (transcode off).
+  * **Carriage-control timing** — **machine** carriage-control is applied to the
+    raw bytes *before* decode, while **ASA** carriage-control is applied *after*
+    decode (it operates on the first character of each decoded line).
+  * **Control file** — the richer LPD control file captures Class (`C`) and Title
+    (`T`); a FORTRAN carriage-control (`r`) data line hints ASA.
 * **`forward`** — tee each captured job to one or more downstream printers,
   optionally rewriting it first. `enabled` (or `-forward`) is the master switch;
   each entry in `targets` is one downstream printer.
@@ -916,7 +947,12 @@ deployment is fully functional. Replace `HOST` with the server's IP.
    and that both `<base>...` and `<base>-sent-<target>...` files exist in the
    capture folder with the transform applied.
 
-If all nine pass, the deployment is good.
+10. **EBCDIC capture** — map a test queue to CP037 in `lpd.queue_defaults`, send an
+    EBCDIC job via LPR to that queue; confirm a readable `<base>-decoded.txt` is
+    written and the job `.json` shows `code_page` and `decoded_as`. An ASCII job to
+    an unmapped queue is captured unchanged (no sidecar).
+
+If all ten pass, the deployment is good.
 
 ---
 
