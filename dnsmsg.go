@@ -64,6 +64,12 @@ func parseName(b []byte, off int) (name string, next int, ok bool) {
 				return "", 0, false
 			}
 			ptr := (l&0x3F)<<8 | int(b[off+1])
+			// Compression pointers must reference PRIOR octets (RFC 1035
+			// §4.1.4). Rejecting forward/self pointers blocks malformed
+			// packets from parsing garbage and makes off strictly decreasing.
+			if ptr >= off {
+				return "", 0, false
+			}
 			if !jumped {
 				next = off + 2
 			}

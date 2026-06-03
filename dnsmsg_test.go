@@ -45,6 +45,15 @@ func TestParseNameCompressionPointer(t *testing.T) {
 	}
 }
 
+func TestParseNameForwardPointerRejected(t *testing.T) {
+	// A pointer that references its own or a later offset is illegal
+	// (RFC 1035 §4.1.4) and must be rejected, not followed.
+	buf := []byte{4, '_', 'i', 'p', 'p', 0xC0, 0x05} // pointer at off=5 targets off=5
+	if _, _, ok := parseName(buf, 0); ok {
+		t.Fatal("forward/self compression pointer should be rejected")
+	}
+}
+
 func TestRdataSRV(t *testing.T) {
 	got := rdataSRV(0, 0, 631, "printcap.local")
 	want := append([]byte{0, 0, 0, 0, 0x02, 0x77}, encodeName("printcap.local")...)
