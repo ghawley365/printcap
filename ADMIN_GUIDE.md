@@ -393,6 +393,18 @@ field to keep its default.
     "airprint": true             // advertise the _universal sub-type + URF key (iOS)
   },
 
+  "smb": {
+    "enabled": false,            // master switch (also -smb); experimental
+    "port": 4445,                // non-445 listener port
+    "share_name": "PRINTER",     // advertised print share name
+    "require_auth": false,       // false = allow guest; true = NTLMv2 only
+    "sign": true,                // SMB2 signing (AES-CMAC) when negotiated
+    "encrypt": true,             // SMB3 encryption (AES-128-GCM) when negotiated
+    "users": [                   // NTLMv2 credentials (passwords redacted in /api/config)
+      { "user": "print", "password": "secret", "domain": "WORKGROUP" }
+    ]
+  },
+
   "log": {
     "level": "info",           // error | warn | info | debug | trace
     "file": "",                // path; empty = printcap.log next to the exe
@@ -559,6 +571,17 @@ field to keep its default.
   `URF` key for iOS). Advertises only the listeners that actually bound. If UDP
   5353 is unavailable, mDNS disables itself and logs a warning; no other listener
   is affected.
+* **`smb`** — **experimental** SMB2/3 print-share capture (off by default; enable
+  with `-smb`). `port` (default `4445`, deliberately non-445 to avoid the OS SMB
+  stack), `share_name`, `require_auth` (`false` allows guest; `true` requires a
+  matching `users` entry), `sign` (SMB2 AES-CMAC signing), `encrypt` (SMB3
+  AES-128-GCM), and `users` (`user`/`password`/`domain` for NTLMv2). Negotiates
+  SMB 3.1.1 with preauth integrity. Passwords are redacted from `/api/config`.
+  > **Security note:** this is a hand-rolled, experimental SMB server surface that
+  > parses untrusted network input. Run it only on trusted segments, keep
+  > `require_auth:true` with real credentials where possible, and prefer a
+  > firewall rule scoping the `4445` port. It is not a general-purpose file server
+  > — only the `\spoolss` print pipe over `IPC$` is serviced.
 
 ---
 
@@ -973,7 +996,17 @@ deployment is fully functional. Replace `HOST` with the server's IP.
     The printer also appears in the macOS "Add Printer" Bonjour list and the iOS
     Print sheet.
 
-If all eleven pass, the deployment is good.
+12. **SMB print share (experimental)** — set `smb.enabled:true` (or `-smb`), then
+    from a Linux/macOS client with Samba's `smbclient`:
+    ```
+    smbclient //HOST/PRINTER -p 4445 -N                # guest (require_auth:false)
+    smbclient //HOST/PRINTER -p 4445 -U print%secret   # NTLMv2 (a configured user)
+    smb> print somefile.pcl
+    ```
+    Confirm an `SMB` job is captured with the document name, flows through PDL
+    detection + forwarding, and that `/api/config` redacts the SMB password.
+
+If all twelve pass, the deployment is good.
 
 ---
 
