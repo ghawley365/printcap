@@ -51,9 +51,10 @@ type job struct {
 	SavedAs   string `json:"saved_as,omitempty"`
 	data      []byte // not serialized; written to the raw file instead
 
-	Forwards    []forwardResult `json:"forwards,omitempty"`
-	captureBase string          // set by sink.save (Task 8); base name for -sent files
-	captureExt  string          // set by sink.save (Task 8); chosen extension
+	Forwards     []forwardResult `json:"forwards,omitempty"`
+	captureBase  string          // set by sink.save (Task 8); base name for -sent files
+	captureExt   string          // set by sink.save (Task 8); chosen extension
+	carriageHint string          // control-file carriage-control hint ("asa" or "")
 }
 
 var (
