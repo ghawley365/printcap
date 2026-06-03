@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"net"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -96,6 +98,24 @@ func buildMIB() {
 	add("1.3.6.1.2.1.43.16.5.1.2.1.1", str("Ready"))                 // prtConsoleDisplayBufferText
 
 	sort.Slice(mib, func(i, j int) bool { return compareOID(mib[i].oid, mib[j].oid) < 0 })
+
+	initEngineID()
+}
+
+// initEngineID sets snmpEngineID from the configured hex value, or derives a
+// stable one from the hostname (falling back to "printcap").
+func initEngineID() {
+	if cfg.SNMP.EngineID != "" {
+		if id, err := hex.DecodeString(cfg.SNMP.EngineID); err == nil && len(id) > 0 {
+			snmpEngineID = id
+			return
+		}
+	}
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		host = "printcap"
+	}
+	snmpEngineID = generateEngineID(host)
 }
 
 // serveSNMP answers SNMP requests on pc until it is closed by the Engine.
@@ -127,7 +147,16 @@ func handleSNMP(b []byte, peer net.Addr) []byte {
 	if !ok {
 		return nil
 	}
-	version := decodeInt(verC) // 0 = v1, 1 = v2c
+	version := int(decodeInt(verC)) // 0 = v1, 1 = v2c, 3 = v3
+	if version == 3 {
+		if !cfg.SNMP.V3Enabled {
+			return nil
+		}
+		return handleSNMPv3(b)
+	}
+	if !cfg.SNMP.AllowV1V2c {
+		return nil
+	}
 	_, commC, p2, ok := readTLV(msg, p)
 	if !ok {
 		return nil
@@ -141,6 +170,22 @@ func handleSNMP(b []byte, peer net.Addr) []byte {
 		return nil
 	}
 
+	respPDU := servePDU(pduTag, pdu, version, peer)
+	if respPDU == nil {
+		return nil
+	}
+
+	out := tlv(berInteger, intContent(int64(version)))
+	out = append(out, tlv(berOctet, []byte(cfg.SNMP.Community))...)
+	out = append(out, respPDU...)
+	return tlv(berSequence, out)
+}
+
+// servePDU serves one request PDU against the shared MIB and returns the full
+// response PDU bytes (tlv(pduResp, ...)). version: 0 = v1 (noSuchName errors),
+// anything else uses v2c semantics (exception varbinds). Used by both the
+// v1/v2c and v3 paths. Returns nil for an unsupported/malformed PDU.
+func servePDU(pduTag byte, pdu []byte, version int, peer net.Addr) []byte {
 	// PDU: request-id, field2, field3, varbind-list
 	_, reqID, q, ok := readTLV(pdu, 0)
 	if !ok {
@@ -177,8 +222,11 @@ func handleSNMP(b []byte, peer net.Addr) []byte {
 	}
 
 	verLabel := "v1"
-	if version == 1 {
+	switch version {
+	case 1:
 		verLabel = "v2c"
+	case 3:
+		verLabel = "v3"
 	}
 	logProto("SNMP", "%s %s from %s, %d OID(s)", verLabel, snmpPduName(pduTag), peer, len(oids))
 	if logger.Level() >= LevelTrace {
@@ -246,7 +294,7 @@ func handleSNMP(b []byte, peer net.Addr) []byte {
 		return nil
 	}
 
-	// Assemble response.
+	// Assemble the response PDU.
 	pduBody := tlv(berInteger, reqID)
 	pduBody = append(pduBody, tlv(berInteger, intContent(int64(errStatus)))...)
 	pduBody = append(pduBody, tlv(berInteger, intContent(int64(errIndex)))...)
@@ -255,11 +303,7 @@ func handleSNMP(b []byte, peer net.Addr) []byte {
 		vbAll = append(vbAll, r...)
 	}
 	pduBody = append(pduBody, tlv(berSequence, vbAll)...)
-
-	out := tlv(berInteger, intContent(int64(version)))
-	out = append(out, tlv(berOctet, []byte(cfg.SNMP.Community))...)
-	out = append(out, tlv(pduResp, pduBody)...)
-	return tlv(berSequence, out)
+	return tlv(pduResp, pduBody)
 }
 
 func snmpPduName(tag byte) string {

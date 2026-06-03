@@ -221,6 +221,21 @@ snmpwalk -v2c -c public <host> 1.3.6.1.2.1.1
 snmpget  -v2c -c public <host> 1.3.6.1.2.1.25.3.2.1.2.1   # -> hrDevicePrinter
 ```
 
+### SNMPv3 (USM)
+
+Enable `snmp.v3_enabled` and define `snmp.users` to serve the same MIB over
+authenticated/encrypted SNMPv3. Each user sets a `level` (noAuthNoPriv |
+authNoPriv | authPriv), an `auth_protocol` (MD5 | SHA-1 | SHA-256 | SHA-512) +
+`auth_pass`, and a `priv_protocol` (DES | AES-128 | AES-192 | AES-256) +
+`priv_pass`. v1/v2c keep working unless `allow_v1v2c:false`. Example:
+
+    snmpget -v3 -l authPriv -u admin -a SHA-256 -A secretauth \
+            -x AES -X secretpriv HOST 1.3.6.1.2.1.1.1.0
+
+A requested security level may not exceed the user's configured level. Engine
+discovery (the SNMPv3 probe for the agent's engine ID) is answered automatically.
+Passphrases are redacted from the dashboard's `/api/config`.
+
 ## Output
 
 Each job produces (depending on `-save`):

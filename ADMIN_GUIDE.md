@@ -355,7 +355,20 @@ field to keep its default.
     "sys_contact": "admin",
     "sys_object_id": "1.3.6.1.4.1.11.2.3.9.1", // vendor identity OID (HP-style default)
     "page_count": 0,            // reported lifetime page count
-    "toner_level_pct": 100      // reported supply level
+    "toner_level_pct": 100,     // reported supply level
+    "v3_enabled": false,        // enable the SNMPv3 USM agent
+    "allow_v1v2c": true,        // false = v3-only (drop v1/v2c)
+    "engine_id": "",            // hex; blank = auto-generated (RFC 3411)
+    "users": [                  // SNMPv3 USM users
+      {
+        "name": "admin",
+        "level": "authPriv",        // noAuthNoPriv | authNoPriv | authPriv
+        "auth_protocol": "SHA-256", // MD5 | SHA-1 | SHA-256 | SHA-512
+        "auth_pass": "secretauth",
+        "priv_protocol": "AES-128", // DES | AES-128 | AES-192 | AES-256
+        "priv_pass": "secretpriv"
+      }
+    ]
   },
 
   "dashboard": {
@@ -406,6 +419,26 @@ field to keep its default.
 * **`snmp.sys_object_id`** — the vendor-identity OID returned for
   `sysObjectID.0`. The default is an HP-style enterprise OID; change it to match
   the vendor you're emulating.
+* **`snmp.v3_enabled` / `allow_v1v2c` / `engine_id` / `users`** — turn on the
+  SNMPv3 USM agent and define its users. With `v3_enabled: true` the same MIB is
+  served over authenticated/encrypted SNMPv3; `allow_v1v2c: false` makes the
+  agent v3-only (v1/v2c requests are dropped). `engine_id` is a hex string —
+  leave it blank to auto-generate an RFC 3411 engine ID. Each entry in `users`
+  has a `name`, a `level` (`noAuthNoPriv` | `authNoPriv` | `authPriv`), an
+  `auth_protocol` (`MD5` | `SHA-1` | `SHA-256` | `SHA-512`) with `auth_pass`, and
+  a `priv_protocol` (`DES` | `AES-128` | `AES-192` | `AES-256`) with `priv_pass`.
+  Engine discovery (the client's probe for the agent's engine ID) is answered
+  automatically.
+
+  > **SECURITY NOTE:** SNMPv3 passphrases (`auth_pass` / `priv_pass`) are
+  > secrets. They are **redacted from `/api/config`**, but they live in the
+  > config file in clear text — protect it with NTFS ACLs (see §14). Prefer
+  > `authPriv` (authenticated **and** encrypted); `authNoPriv` leaves payloads
+  > readable and `noAuthNoPriv` offers no protection at all. A requested security
+  > level cannot exceed the user's configured `level` (asking for `authPriv`
+  > against an `authNoPriv` user is refused). The agent remains **read-only** —
+  > there is no SET support over any version. Note that v1/v2c community strings
+  > are still sent in clear text unless you set `allow_v1v2c: false`.
 * **`tls.cert_file` / `key_file`** — supply a real certificate for IPPS if
   clients validate it. Left blank, printcap mints a fresh in-memory self-signed
   certificate at startup (clients must skip validation).
@@ -800,7 +833,12 @@ deployment is fully functional. Replace `HOST` with the server's IP.
 7. **Output on disk** — the capture folder contains matching `.json` + spool
    files.
 
-If all seven pass, the deployment is good.
+8. **SNMPv3** — define an authPriv user, then from a client:
+   `snmpget -v3 -l authPriv -u admin -a SHA-256 -A <auth> -x AES -X <priv> HOST 1.3.6.1.2.1.1.1.0`
+   returns sysDescr. A wrong `-A`/`-X` is rejected with no data. With
+   `allow_v1v2c:false`, `snmpget -v2c -c public` gets no reply.
+
+If all eight pass, the deployment is good.
 
 ---
 
