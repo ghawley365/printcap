@@ -236,6 +236,27 @@ A requested security level may not exceed the user's configured level. Engine
 discovery (the SNMPv3 probe for the agent's engine ID) is answered automatically.
 Passphrases are redacted from the dashboard's `/api/config`.
 
+## Auto-discovery (Bonjour / mDNS)
+
+printcap advertises itself over **mDNS/DNS-SD** so CUPS, macOS, and iOS
+(AirPrint) discover it automatically — no manual IP/port entry (Windows needs
+Apple's Bonjour Print Services). It announces a
+service for each enabled listener: `_ipp._tcp` (IPP), `_ipps._tcp` (IPPS),
+`_pdl-datastream._tcp` (raw/9100), and `_printer._tcp` (LPD), plus the
+`_universal` AirPrint sub-type so iPhones list it in the Print sheet.
+
+Control it in the `mdns` config block: `enabled` (or `-mdns`), `instance`
+(service name; default the printer name), `hostname` (advertised `<host>.local`),
+and `airprint` (advertise the AirPrint sub-type + URF key). If UDP 5353 is
+already owned by another responder (e.g. Apple Bonjour, Avahi, or the Windows
+resolver), printcap logs a warning and disables only its mDNS advertisement.
+
+Verify:
+
+    dns-sd -B _ipp._tcp           # macOS
+    avahi-browse -rat             # Linux
+    ippfind                       # resolves the printer URI
+
 ## Output
 
 Each job produces (depending on `-save`):

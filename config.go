@@ -41,6 +41,7 @@ type Config struct {
 	Printer   Printer     `json:"printer"`
 	SNMP      SNMPConf    `json:"snmp"`
 	Dashboard DashConf    `json:"dashboard"`
+	MDNS      MDNSConf    `json:"mdns"`
 	Log       LogConf     `json:"log"`
 	Forward   ForwardConf `json:"forward"`
 	EBCDIC    EBCDICConf  `json:"ebcdic"`
@@ -210,6 +211,15 @@ type DashConf struct {
 	Enabled bool `json:"enabled"`
 }
 
+// MDNSConf drives the built-in mDNS/DNS-SD (Bonjour) responder that makes
+// printcap auto-discoverable as a driverless printer.
+type MDNSConf struct {
+	Enabled  bool   `json:"enabled"`
+	Instance string `json:"instance"` // blank = printer.name
+	Hostname string `json:"hostname"` // blank = sanitized printer.name
+	AirPrint bool   `json:"airprint"`
+}
+
 func (c *Config) mode() saveMode {
 	switch strings.ToLower(c.Save) {
 	case "raw":
@@ -289,6 +299,12 @@ func defaultConfig() *Config {
 			Users:         []SNMPUser{},
 		},
 		Dashboard: DashConf{Enabled: true},
+		MDNS: MDNSConf{
+			Enabled:  true,
+			Instance: "",
+			Hostname: "",
+			AirPrint: true,
+		},
 		EBCDIC: EBCDICConf{
 			Enabled:         true,
 			DefaultCodePage: "CP037",

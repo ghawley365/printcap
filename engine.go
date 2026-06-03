@@ -69,29 +69,32 @@ func (e *Engine) Start() (int, error) {
 
 	bindAddr := func(port int) string { return net.JoinHostPort(cfg.Bind, itoa(port)) }
 
-	addTCP := func(name string, port int, serve func(net.Listener)) {
+	var bl boundListeners
+
+	addTCP := func(name string, port int, serve func(net.Listener)) bool {
 		if port <= 0 {
-			return
+			return false
 		}
 		ln, err := net.Listen("tcp", bindAddr(port))
 		if err != nil {
 			e.logf("%s: %v", name, err)
-			return
+			return false
 		}
 		e.closers = append(e.closers, ln)
 		e.active = append(e.active, name+":"+itoa(port))
 		logInfo("engine", "listening %s on %s", name, bindAddr(port))
 		go serve(ln)
+		return true
 	}
 
-	addHTTP := func(name string, port int, tlsCfg *tls.Config, h http.Handler) {
+	addHTTP := func(name string, port int, tlsCfg *tls.Config, h http.Handler) bool {
 		if port <= 0 {
-			return
+			return false
 		}
 		ln, err := net.Listen("tcp", bindAddr(port))
 		if err != nil {
 			e.logf("%s: %v", name, err)
-			return
+			return false
 		}
 		srv := hardenedServer("", h)
 		if tlsCfg != nil {
@@ -101,6 +104,7 @@ func (e *Engine) Start() (int, error) {
 		e.active = append(e.active, name+":"+itoa(port))
 		logInfo("engine", "listening %s on %s%s", name, bindAddr(port), tlsLabel(tlsCfg))
 		go srv.Serve(ln)
+		return true
 	}
 
 	// Auto-TLS single port (serves both IPP and IPPS).
@@ -113,20 +117,29 @@ func (e *Engine) Start() (int, error) {
 			e.closers = append(e.closers, ln)
 			e.active = append(e.active, "IPP/IPPS:"+itoa(ports.AutoTLS))
 			go serveAutoTLS(ln, tlsCfg)
+			bl.IPP, bl.IPPS = ports.AutoTLS, ports.AutoTLS
 		}
 	}
 
-	addTCP("9100", ports.Raw9100, serveRaw9100)
+	if addTCP("9100", ports.Raw9100, serveRaw9100) {
+		bl.Raw9100 = ports.Raw9100
+	}
 	for _, ep := range cfg.Raw.ExtraPorts {
 		addTCP("9100", ep, serveRaw9100) // multi-port raw servers (9101, 9102, …)
 	}
-	addTCP("LPR", ports.LPR, serveLPD)
-	addHTTP("IPP", ports.IPP, nil, http.HandlerFunc(ippHandler))
+	if addTCP("LPR", ports.LPR, serveLPD) {
+		bl.LPR = ports.LPR
+	}
+	if addHTTP("IPP", ports.IPP, nil, http.HandlerFunc(ippHandler)) {
+		bl.IPP = ports.IPP
+	}
 	if ports.IPPS > 0 {
 		if tlsCfg, err := tlsConfig(); err != nil {
 			e.logf("IPPS: %v", err)
 		} else {
-			addHTTP("IPPS", ports.IPPS, tlsCfg, http.HandlerFunc(ippHandler))
+			if addHTTP("IPPS", ports.IPPS, tlsCfg, http.HandlerFunc(ippHandler)) {
+				bl.IPPS = ports.IPPS
+			}
 		}
 	}
 
@@ -142,7 +155,20 @@ func (e *Engine) Start() (int, error) {
 	}
 
 	if cfg.Dashboard.Enabled && ports.Dashboard > 0 {
-		addHTTP("dashboard", ports.Dashboard, nil, dashboardHandler())
+		if addHTTP("dashboard", ports.Dashboard, nil, dashboardHandler()) {
+			bl.Dash = ports.Dashboard
+		}
+	}
+
+	if cfg.MDNS.Enabled {
+		host := resolveHost()
+		v4, v6 := localAddrs(cfg.Bind)
+		svcs := buildServices(bl, cfg.MDNS.AirPrint, resolveInstance())
+		if len(svcs) > 0 {
+			if r := startResponder(svcs, svcAddrs{host: host, v4: v4, v6: v6}); r != nil {
+				e.closers = append(e.closers, r)
+			}
+		}
 	}
 
 	e.running = len(e.active) > 0
@@ -206,4 +232,34 @@ func (e *Engine) logf(format string, args ...interface{}) {
 	if engineLog != nil {
 		engineLog(msg)
 	}
+}
+
+// localAddrs returns the IPv4 and IPv6 addresses to advertise. A specific bind
+// address is advertised as-is; 0.0.0.0/:: expands to all non-loopback
+// interface addresses.
+func localAddrs(bind string) (v4, v6 []net.IP) {
+	if bind != "" && bind != "0.0.0.0" && bind != "::" {
+		if ip := net.ParseIP(bind); ip != nil {
+			if ip4 := ip.To4(); ip4 != nil {
+				return []net.IP{ip4}, nil
+			}
+			return nil, []net.IP{ip}
+		}
+	}
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil, nil
+	}
+	for _, a := range addrs {
+		ipNet, ok := a.(*net.IPNet)
+		if !ok || ipNet.IP.IsLoopback() || ipNet.IP.IsLinkLocalUnicast() {
+			continue // skip loopback and link-local (v4 APIPA 169.254/16 and v6 fe80::/10)
+		}
+		if ip4 := ipNet.IP.To4(); ip4 != nil {
+			v4 = append(v4, ip4)
+		} else if ipNet.IP.To16() != nil {
+			v6 = append(v6, ipNet.IP)
+		}
+	}
+	return v4, v6
 }

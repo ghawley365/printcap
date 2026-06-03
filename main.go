@@ -97,6 +97,7 @@ func main() {
 	flag.String("community", "", "SNMP community string")
 	flag.String("model", "", "printer make-and-model advertised over IPP/SNMP")
 	flag.Bool("forward", false, "enable the transform & forward proxy")
+	flag.Bool("mdns", true, "advertise the printer over mDNS/DNS-SD (Bonjour)")
 	flag.Parse()
 
 	// Resolve the config file path (explicit flag, else next to the exe).
@@ -218,6 +219,8 @@ func applyFlagOverrides() {
 			cfg.Printer.MakeAndModel = get()
 		case "forward":
 			cfg.Forward.Enabled = get() == "true"
+		case "mdns":
+			cfg.MDNS.Enabled = get() == "true"
 		}
 	})
 }
