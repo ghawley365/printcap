@@ -46,6 +46,10 @@ type job struct {
 	Bytes     int    `json:"bytes"`
 	SavedAs   string `json:"saved_as,omitempty"`
 	data      []byte // not serialized; written to the raw file instead
+
+	Forwards    []forwardResult `json:"forwards,omitempty"`
+	captureBase string          // set by sink.save (Task 8); base name for -sent files
+	captureExt  string          // set by sink.save (Task 8); chosen extension
 }
 
 var (
@@ -87,6 +91,7 @@ func main() {
 	flag.String("key", "", "TLS private key PEM (self-signed if empty)")
 	flag.String("community", "", "SNMP community string")
 	flag.String("model", "", "printer make-and-model advertised over IPP/SNMP")
+	flag.Bool("forward", false, "enable the transform & forward proxy")
 	flag.Parse()
 
 	// Resolve the config file path (explicit flag, else next to the exe).
@@ -206,6 +211,8 @@ func applyFlagOverrides() {
 			cfg.SNMP.Community = get()
 		case "model":
 			cfg.Printer.MakeAndModel = get()
+		case "forward":
+			cfg.Forward.Enabled = get() == "true"
 		}
 	})
 }

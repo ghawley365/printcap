@@ -29,19 +29,52 @@ const (
 // defaultConfig(); a -config file overlays onto them; explicit flags override
 // last. Use -dump-config to write the effective config as a template to edit.
 type Config struct {
-	Bind      string   `json:"bind"`       // interface to bind all listeners to
-	Ports     Ports    `json:"ports"`      // 0 disables a given listener
-	Save      string   `json:"save"`       // both | raw | meta
-	OutDir    string   `json:"out_dir"`    // capture output directory
-	MaxJobMB  int      `json:"max_job_mb"` // per-job byte cap (0 = unlimited)
-	TLS       TLSConf  `json:"tls"`
-	Raw       RawOpts  `json:"raw"`
-	LPD       LPDOpts  `json:"lpd"`
-	IPPOpts   IPPOpts  `json:"ipp_options"`
-	Printer   Printer  `json:"printer"`
-	SNMP      SNMPConf `json:"snmp"`
-	Dashboard DashConf `json:"dashboard"`
-	Log       LogConf  `json:"log"`
+	Bind      string      `json:"bind"`       // interface to bind all listeners to
+	Ports     Ports       `json:"ports"`      // 0 disables a given listener
+	Save      string      `json:"save"`       // both | raw | meta
+	OutDir    string      `json:"out_dir"`    // capture output directory
+	MaxJobMB  int         `json:"max_job_mb"` // per-job byte cap (0 = unlimited)
+	TLS       TLSConf     `json:"tls"`
+	Raw       RawOpts     `json:"raw"`
+	LPD       LPDOpts     `json:"lpd"`
+	IPPOpts   IPPOpts     `json:"ipp_options"`
+	Printer   Printer     `json:"printer"`
+	SNMP      SNMPConf    `json:"snmp"`
+	Dashboard DashConf    `json:"dashboard"`
+	Log       LogConf     `json:"log"`
+	Forward   ForwardConf `json:"forward"`
+}
+
+type ForwardConf struct {
+	Enabled bool              `json:"enabled"`
+	Capture string            `json:"capture"` // both | sent | orig
+	Macros  map[string]string `json:"macros"`
+	Targets []ForwardTarget   `json:"targets"`
+}
+
+type ForwardTarget struct {
+	Name                 string          `json:"name"`
+	Transport            string          `json:"transport"` // raw | lpr | ipp | ipps
+	Address              string          `json:"address"`
+	TimeoutMS            int             `json:"timeout_ms"`
+	Queue                string          `json:"queue"`
+	PrivilegedSourcePort bool            `json:"privileged_source_port"`
+	TLSSkipVerify        bool            `json:"tls_skip_verify"`
+	DocumentFormat       string          `json:"document_format"`
+	When                 ForwardCond     `json:"when"`
+	Failure              string          `json:"failure"` // best_effort | spool_retry | block
+	Retry                ForwardRetry    `json:"retry"`
+	Transforms           []TransformStep `json:"transforms"`
+}
+
+type TransformStep struct {
+	Type  string      `json:"type"` // replace | inject_prefix | inject_suffix
+	Mode  string      `json:"mode"` // replace: literal | regex | hex
+	Match string      `json:"match"`
+	With  string      `json:"with"`
+	All   bool        `json:"all"`
+	Data  string      `json:"data"` // inject_*: \xNN-escaped, supports macro:NAME
+	When  ForwardCond `json:"when"`
 }
 
 // LogConf configures the logging subsystem.
@@ -234,6 +267,12 @@ func defaultConfig() *Config {
 			Users:         []SNMPUser{},
 		},
 		Dashboard: DashConf{Enabled: true},
+		Forward: ForwardConf{
+			Enabled: false,
+			Capture: "both",
+			Macros:  map[string]string{},
+			Targets: []ForwardTarget{},
+		},
 		Log: LogConf{
 			Level:      "info",
 			File:       "",
