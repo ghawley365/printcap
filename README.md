@@ -245,6 +245,29 @@ Each job produces (depending on `-save`):
 * a `.json` sidecar: protocol, source IP, timestamp, user, host, job name,
   document format, byte count
 
+## Forwarding & transform (proxy)
+
+printcap can also **forward** each captured job to one or more real printers
+after running it through a **transform pipeline** — find/replace and PCL/command
+injection — while still capturing the original (a tee). Enable with
+`forward.enabled` (or `-forward`).
+
+Each entry in `forward.targets` defines a downstream printer: a `transport`
+(`raw`/9100, `lpr`, or `ipp`/`ipps`), an `address`, a routing `when` condition,
+an ordered list of `transforms`, and a `failure` policy
+(`best_effort` | `spool_retry` | `block`). A job is sent to every target whose
+condition matches. Transforms are `replace` (literal/regex/hex) and
+`inject_prefix`/`inject_suffix` (raw bytes with `\xNN` escapes and reusable
+`macro:` references). `capture` controls what lands on disk: `both` (default),
+`sent`, or `orig`.
+
+> **Length safety:** `replace` is intended for text/PCL/PostScript. Replacements
+> that change byte length can corrupt length-indexed formats (PDF cross-reference
+> tables, PCL transparent-data/raster blocks). Gate such rules with
+> `when.pdls` to restrict them to safe formats.
+
+See `ADMIN_GUIDE.md` for the full config block and examples.
+
 ## How clients reach it
 
 * **Raw/9100** — add a "Standard TCP/IP Port" printer pointing at the host, "Raw", port 9100.

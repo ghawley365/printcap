@@ -393,6 +393,44 @@ field to keep its default.
       "rfc5424": false,        // true = RFC 5424; false = RFC 3164 (BSD)
       "app_name": "printcap"
     }
+  },
+
+  "forward": {
+    "enabled": false,            // master switch (also -forward)
+    "capture": "both",           // both | sent | orig
+    "macros": {                  // reusable named byte blocks (\xNN-escapable)
+      "pcl_reset": "\\x1bE"
+    },
+    "targets": [
+      {
+        "name": "lab-printer",
+        "transport": "raw",      // raw | lpr | ipp | ipps
+        "address": "10.0.0.20:9100",
+        "timeout_ms": 30000,
+        "queue": "auto",         // lpr: LPD queue ("auto"/blank = job's queue or "lp")
+        "privileged_source_port": false, // lpr
+        "tls_skip_verify": true, // ipps: accept self-signed downstream
+        "document_format": "",   // ipp: blank = detected/forwarded format
+        "when": {                // routing condition (empty = always)
+          "protocols": ["IPP","9100"],
+          "source_cidrs": ["10.0.0.0/24"],
+          "users": [], "hosts": [], "job_name": "*invoice*",
+          "queues": [], "doc_formats": [], "pdls": ["PCL","PostScript"],
+          "contains": "@PJL",    // literal | /regex/ | hex:1b45
+          "min_bytes": 0, "max_bytes": 0
+        },
+        "failure": "best_effort", // best_effort | spool_retry | block
+        "retry": { "max_attempts": 5, "backoff_ms": 2000, "ttl_min": 60 },
+        "transforms": [
+          { "type": "inject_prefix", "data": "macro:pcl_reset" },
+          { "type": "replace", "mode": "literal", "match": "ACME", "with": "Globex", "all": true,
+            "when": { "pdls": ["PCL","PostScript","Text"] } },
+          { "type": "replace", "mode": "regex", "match": "Draft\\s+\\d+", "with": "FINAL" },
+          { "type": "replace", "mode": "hex", "match": "1b266c3153", "with": "1b266c3044" },
+          { "type": "inject_suffix", "data": "macro:pcl_reset" }
+        ]
+      }
+    ]
   }
 }
 ```
@@ -442,6 +480,41 @@ field to keep its default.
 * **`tls.cert_file` / `key_file`** — supply a real certificate for IPPS if
   clients validate it. Left blank, printcap mints a fresh in-memory self-signed
   certificate at startup (clients must skip validation).
+* **`forward`** — tee each captured job to one or more downstream printers,
+  optionally rewriting it first. `enabled` (or `-forward`) is the master switch;
+  each entry in `targets` is one downstream printer.
+  * **`transport` + `address`** — `raw` uses `host:port` (e.g. `10.0.0.20:9100`);
+    `lpr` uses `host:port` plus `queue` ("auto"/blank = the job's own queue, else
+    `lp`) and `privileged_source_port` (bind a 721–731 source port for strict
+    LPD servers); `ipp`/`ipps` use a full URI such as
+    `ipp://host:631/ipp/print` plus `tls_skip_verify` (accept a self-signed
+    downstream) and `document_format` (blank = the detected/forwarded format).
+  * **`when`** — the routing condition; a target only fires when **every** field
+    present matches (logical AND), and list fields match if **any** element
+    matches. An empty `when` always matches. `contains` and `job_name` accept a
+    literal, a `/regex/`, or a `hex:1b45` byte pattern.
+  * **`transforms`** — an ordered list of steps applied to the forwarded copy.
+    `replace` rewrites bytes in `literal`, `regex`, or `hex` mode (`all` replaces
+    every occurrence); `inject_prefix` / `inject_suffix` prepend / append raw
+    bytes. The `with` value and inject `data` support `\xNN` escapes and
+    `macro:NAME` references into `forward.macros`. A per-transform `when` gates
+    individual steps (same fields as the target `when`).
+  * **`failure`** — what happens when a target can't be reached:
+    * `best_effort` — always deliver if possible but **never block the sender**;
+      delivery failures are only logged.
+    * `spool_retry` — retry in memory with `retry.backoff_ms` up to
+      `retry.max_attempts` or `retry.ttl_min`; retries are **not persisted**
+      across a restart.
+    * `block` — propagate the failure back to the inbound client (the print
+      fails upstream).
+  * **`capture`** — what lands on disk: `both` (default), `sent` (transformed
+    only), or `orig` (original only). Transformed copies are written as
+    `<base>-sent-<target><ext>` alongside the original.
+
+  > **Length safety:** `replace` is intended for text/PCL/PostScript. Replacements
+  > that change byte length can corrupt length-indexed formats (PDF cross-reference
+  > tables, PCL transparent-data/raster blocks). Gate such rules with
+  > `when.pdls` to restrict them to safe formats.
 
 ---
 
@@ -838,7 +911,12 @@ deployment is fully functional. Replace `HOST` with the server's IP.
    returns sysDescr. A wrong `-A`/`-X` is rejected with no data. With
    `allow_v1v2c:false`, `snmpget -v2c -c public` gets no reply.
 
-If all eight pass, the deployment is good.
+9. **Forwarding** — set `forward.enabled:true` with a `raw` target pointing at a
+   test printer (or `nc -l 9100`). Print a job; confirm it appears at the target,
+   and that both `<base>...` and `<base>-sent-<target>...` files exist in the
+   capture folder with the transform applied.
+
+If all nine pass, the deployment is good.
 
 ---
 
