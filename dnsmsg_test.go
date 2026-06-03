@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"net"
 	"testing"
 )
@@ -74,5 +75,45 @@ func TestRdataAAAA(t *testing.T) {
 	got := rdataAAAA(net.ParseIP("fe80::1"))
 	if len(got) != 16 {
 		t.Fatalf("rdataAAAA len=%d", len(got))
+	}
+}
+
+func buildQuery(name string, qtype uint16, unicast bool) []byte {
+	var b []byte
+	hdr := make([]byte, 12)
+	binary.BigEndian.PutUint16(hdr[4:], 1)
+	b = append(b, hdr...)
+	b = append(b, encodeName(name)...)
+	qt := make([]byte, 4)
+	binary.BigEndian.PutUint16(qt[0:], qtype)
+	qclass := dnsClassIN
+	if unicast {
+		qclass |= dnsFlushBit
+	}
+	binary.BigEndian.PutUint16(qt[2:], qclass)
+	return append(b, qt...)
+}
+
+func TestParseQuestions(t *testing.T) {
+	q := buildQuery("_ipp._tcp.local", dnsTypePTR, true)
+	qs, ok := parseQuestions(q)
+	if !ok || len(qs) != 1 {
+		t.Fatalf("ok=%v n=%d", ok, len(qs))
+	}
+	if qs[0].name != "_ipp._tcp.local" || qs[0].qtype != dnsTypePTR || !qs[0].unicast {
+		t.Fatalf("got %+v", qs[0])
+	}
+}
+
+func TestBuildResponseParsesBack(t *testing.T) {
+	recs := []dnsRecord{
+		{name: "_ipp._tcp.local", rtype: dnsTypePTR, ttl: ttlDNSSD, data: rdataPTR("printcap._ipp._tcp.local")},
+	}
+	resp := buildResponse(recs)
+	if binary.BigEndian.Uint16(resp[2:]) != 0x8400 {
+		t.Fatalf("flags=0x%04x", binary.BigEndian.Uint16(resp[2:]))
+	}
+	if binary.BigEndian.Uint16(resp[6:]) != 1 {
+		t.Fatalf("ancount=%d", binary.BigEndian.Uint16(resp[6:]))
 	}
 }
