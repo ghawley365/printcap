@@ -36,3 +36,21 @@ func TestDecodeEBCDIC_UnknownPageReturnsEmpty(t *testing.T) {
 		t.Fatalf("unknown page should return empty, got %q", got)
 	}
 }
+
+func TestLooksEBCDIC(t *testing.T) {
+	// EBCDIC "HELLO WORLD" (0x40 = space, dominant on padded records).
+	ebc := []byte{0xC8, 0xC5, 0xD3, 0xD3, 0xD6, 0x40, 0xE6, 0xD6, 0xD9, 0xD3, 0xC4,
+		0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40}
+	if !looksEBCDIC(ebc) {
+		t.Error("expected EBCDIC detection true")
+	}
+	if looksEBCDIC([]byte("Hello world, this is plain ASCII text.\n")) {
+		t.Error("ASCII text should not be detected as EBCDIC")
+	}
+	if looksEBCDIC([]byte("%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")) {
+		t.Error("PDF binary should not be detected as EBCDIC")
+	}
+	if looksEBCDIC(nil) {
+		t.Error("empty should be false")
+	}
+}

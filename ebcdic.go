@@ -140,3 +140,52 @@ func decodeEBCDIC(data []byte, page string) string {
 	}
 	return string(out)
 }
+
+// looksEBCDIC heuristically reports whether data is EBCDIC text. It samples the
+// first 4 KiB and is deliberately conservative: it requires the EBCDIC space
+// (0x40) to be the dominant byte and a high share of bytes in EBCDIC-printable
+// ranges, while ASCII printables are sparse. Favors leaving data raw over
+// corrupting ASCII.
+func looksEBCDIC(data []byte) bool {
+	n := len(data)
+	if n == 0 {
+		return false
+	}
+	if n > 4096 {
+		n = 4096
+	}
+	var spaces, ebcPrintable, asciiPrintable int
+	for _, b := range data[:n] {
+		if b == 0x40 {
+			spaces++
+		}
+		if isEBCDICPrintable(b) {
+			ebcPrintable++
+		}
+		if b >= 0x20 && b <= 0x7e && b != 0x40 {
+			// Exclude 0x40 (EBCDIC space / ASCII '@'): counting it lands letter+space
+			// EBCDIC samples exactly on the 50% boundary and breaks detection.
+			asciiPrintable++
+		}
+	}
+	return spaces*100/n >= 8 &&
+		ebcPrintable*100/n >= 80 &&
+		asciiPrintable*100/n < 50
+}
+
+func isEBCDICPrintable(b byte) bool {
+	switch {
+	case b == 0x40: // space
+		return true
+	case b >= 0x4A && b <= 0x50, b >= 0x5A && b <= 0x61, b >= 0x6A && b <= 0x6F,
+		b >= 0x7A && b <= 0x7F: // punctuation clusters
+		return true
+	case b >= 0x81 && b <= 0x89, b >= 0x91 && b <= 0x99, b >= 0xA2 && b <= 0xA9: // a-z
+		return true
+	case b >= 0xC1 && b <= 0xC9, b >= 0xD1 && b <= 0xD9, b >= 0xE2 && b <= 0xE9: // A-Z
+		return true
+	case b >= 0xF0 && b <= 0xF9: // 0-9
+		return true
+	}
+	return false
+}
