@@ -386,6 +386,13 @@ field to keep its default.
     "enabled": true
   },
 
+  "mdns": {
+    "enabled": true,             // master switch (also -mdns)
+    "instance": "",              // service name; blank = printer.name
+    "hostname": "",              // advertised <host>.local; blank = sanitized printer.name
+    "airprint": true             // advertise the _universal sub-type + URF key (iOS)
+  },
+
   "log": {
     "level": "info",           // error | warn | info | debug | trace
     "file": "",                // path; empty = printcap.log next to the exe
@@ -546,6 +553,12 @@ field to keep its default.
   > that change byte length can corrupt length-indexed formats (PDF cross-reference
   > tables, PCL transparent-data/raster blocks). Gate such rules with
   > `when.pdls` to restrict them to safe formats.
+* **`mdns`** — Bonjour/DNS-SD advertisement: `enabled`, `instance` (service name;
+  blank = `printer.name`), `hostname` (advertised `<host>.local`; blank =
+  sanitized `printer.name`), `airprint` (advertise the `_universal` sub-type and
+  `URF` key for iOS). Advertises only the listeners that actually bound. If UDP
+  5353 is unavailable, mDNS disables itself and logs a warning; no other listener
+  is affected.
 
 ---
 
@@ -952,7 +965,15 @@ deployment is fully functional. Replace `HOST` with the server's IP.
     written and the job `.json` shows `code_page` and `decoded_as`. An ASCII job to
     an unmapped queue is captured unchanged (no sidecar).
 
-If all ten pass, the deployment is good.
+11. **mDNS discovery** — on a macOS/Linux client on the same subnet:
+    ```
+    ippfind            # prints ipp://<host>.local:631/ipp/print
+    avahi-browse -rat  # (Linux) lists printcap under _ipp._tcp
+    ```
+    The printer also appears in the macOS "Add Printer" Bonjour list and the iOS
+    Print sheet.
+
+If all eleven pass, the deployment is good.
 
 ---
 
