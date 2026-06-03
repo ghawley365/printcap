@@ -93,13 +93,14 @@ func uniqueInstance(base string, taken map[string]bool) string {
 
 // mdnsResponder owns the multicast sockets and the advertised service set.
 type mdnsResponder struct {
-	conns []*net.UDPConn
-	svcs  []service
-	addrs svcAddrs
-	grp4  *net.UDPAddr
-	grp6  *net.UDPAddr
-	mu    sync.Mutex
-	done  chan struct{}
+	conns  []*net.UDPConn
+	svcs   []service
+	addrs  svcAddrs
+	grp4   *net.UDPAddr
+	grp6   *net.UDPAddr
+	mu     sync.Mutex
+	closed bool
+	done   chan struct{}
 }
 
 // startResponder opens whatever multicast sockets it can and begins answering.
@@ -329,6 +330,10 @@ func (r *mdnsResponder) allRecords() []dnsRecord {
 func (r *mdnsResponder) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.closed {
+		return nil // idempotent: a second Close must not re-close r.done
+	}
+	r.closed = true
 	close(r.done)
 	goodbye := r.allRecords()
 	for i := range goodbye {

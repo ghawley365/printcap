@@ -126,3 +126,18 @@ func recNames(recs []dnsRecord) []string {
 	}
 	return out
 }
+
+func TestResponderCloseIdempotent(t *testing.T) {
+	// Close must be safe to call more than once (defer + signal handler can
+	// both fire). With no open conns it sends no goodbye and only flips state.
+	r := &mdnsResponder{
+		svcs: []service{{instance: "printcap", svcType: "_ipp._tcp", port: 631}},
+		done: make(chan struct{}),
+	}
+	if err := r.Close(); err != nil {
+		t.Fatalf("first Close: %v", err)
+	}
+	if err := r.Close(); err != nil { // must NOT panic on close of closed channel
+		t.Fatalf("second Close: %v", err)
+	}
+}
