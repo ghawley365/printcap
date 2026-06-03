@@ -271,7 +271,7 @@ func buildIPPResponse(op, status uint16, reqID uint32, host string) []byte {
 			writeResolution(&buf, "printer-resolution-default", p.Resolutions[0])
 		}
 		writeStrSet(&buf, tagKeyword, "pwg-raster-document-type-supported", "srgb_8", "sgray_8")
-		writeStrSet(&buf, tagKeyword, "urf-supported", "V1.4", "W8", "SRGB24", "RS300-600")
+		writeStrSet(&buf, tagKeyword, "urf-supported", urfSupported()...)
 
 	case opPrintJob, opCreateJob, opSendDocument, opValidateJob:
 		buf.WriteByte(tagJobAttrs)
