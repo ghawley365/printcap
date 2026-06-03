@@ -36,6 +36,10 @@ type smbSession struct {
 	trees      map[uint32]string
 	nextTreeID uint32
 	handles    map[string]*pipeHandle
+
+	// remoteAddr is the client's "ip:port", recorded as the capture Source. It
+	// is set by the connection driver; "" in unit tests.
+	remoteAddr string
 }
 
 // SESSION_SETUP request/response structure sizes ([MS-SMB2] §2.2.5, §2.2.6).
