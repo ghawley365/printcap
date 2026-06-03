@@ -1,0 +1,6 @@
+# Local Go build artifacts (the module builds to ./printcap on non-Windows).
+# The committed Windows build printcap.exe is intentionally tracked.
+/printcap
+*.test
+*.out
+coverage.txt
