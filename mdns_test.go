@@ -52,6 +52,21 @@ func TestAnswersForUnrelatedQuestionEmpty(t *testing.T) {
 	}
 }
 
+func TestUniqueInstance(t *testing.T) {
+	if got := uniqueInstance("printcap", map[string]bool{}); got != "printcap" {
+		t.Fatalf("free name should be unchanged, got %q", got)
+	}
+	taken := map[string]bool{"printcap": true}
+	if got := uniqueInstance("printcap", taken); got != "printcap (2)" {
+		t.Fatalf("got %q, want %q", got, "printcap (2)")
+	}
+	taken["printcap (2)"] = true
+	taken["printcap (3)"] = true
+	if got := uniqueInstance("printcap", taken); got != "printcap (4)" {
+		t.Fatalf("got %q, want %q", got, "printcap (4)")
+	}
+}
+
 func hasRecord(recs []dnsRecord, name string, rtype uint16) bool {
 	for _, r := range recs {
 		if r.name == name && r.rtype == rtype {

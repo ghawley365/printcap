@@ -1,6 +1,9 @@
 package main
 
-import "net"
+import (
+	"net"
+	"strconv"
+)
 
 // temporary: removed in the responder runtime sub-task once *net.UDPConn is used
 // directly. The pure answer-selection helpers below reference net only through
@@ -73,4 +76,18 @@ func answersFor(q dnsQuestion, svcs []service, a svcAddrs) []dnsRecord {
 		}
 	}
 	return out
+}
+
+// uniqueInstance returns base if it is not in taken; otherwise it appends
+// " (2)", " (3)", … until it finds a name not in taken (RFC 6762 §9 style).
+func uniqueInstance(base string, taken map[string]bool) string {
+	if !taken[base] {
+		return base
+	}
+	for n := 2; ; n++ {
+		cand := base + " (" + strconv.Itoa(n) + ")"
+		if !taken[cand] {
+			return cand
+		}
+	}
 }
