@@ -132,6 +132,16 @@ func redactedConfig() *Config {
 		}
 		c.SNMP.Users = us
 	}
+	if len(c.SMB.Users) > 0 {
+		us := make([]SMBUser, len(c.SMB.Users))
+		copy(us, c.SMB.Users)
+		for i := range us {
+			if us[i].Password != "" {
+				us[i].Password = "***"
+			}
+		}
+		c.SMB.Users = us
+	}
 	c.TLS.CertFile = ""
 	c.TLS.KeyFile = ""
 	return &c

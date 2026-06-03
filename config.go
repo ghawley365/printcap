@@ -45,6 +45,7 @@ type Config struct {
 	Log       LogConf     `json:"log"`
 	Forward   ForwardConf `json:"forward"`
 	EBCDIC    EBCDICConf  `json:"ebcdic"`
+	SMB       SMBConf     `json:"smb"`
 }
 
 // EBCDICConf controls decoding of EBCDIC (mainframe) print streams into a
@@ -220,6 +221,25 @@ type MDNSConf struct {
 	AirPrint bool   `json:"airprint"`
 }
 
+// SMBUser is a credential the SMB share accepts (NTLMv2).
+type SMBUser struct {
+	User     string `json:"user"`
+	Password string `json:"password"`
+	Domain   string `json:"domain"`
+}
+
+// SMBConf drives the experimental SMB2/3 print-share capture listener. Default
+// off; runs on a configurable non-445 port.
+type SMBConf struct {
+	Enabled     bool      `json:"enabled"`
+	Port        int       `json:"port"`
+	ShareName   string    `json:"share_name"`
+	RequireAuth bool      `json:"require_auth"`
+	Sign        bool      `json:"sign"`
+	Encrypt     bool      `json:"encrypt"`
+	Users       []SMBUser `json:"users"`
+}
+
 func (c *Config) mode() saveMode {
 	switch strings.ToLower(c.Save) {
 	case "raw":
@@ -311,6 +331,15 @@ func defaultConfig() *Config {
 			AutoDetect:      true,
 			DecodedSidecar:  true,
 			CarriageControl: "auto",
+		},
+		SMB: SMBConf{
+			Enabled:     false,
+			Port:        4445,
+			ShareName:   "PRINTER",
+			RequireAuth: false,
+			Sign:        true,
+			Encrypt:     true,
+			Users:       []SMBUser{},
 		},
 		Forward: ForwardConf{
 			Enabled: false,
