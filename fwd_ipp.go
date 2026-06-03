@@ -20,7 +20,7 @@ func (ippTransport) send(t *target, data []byte, j *job) error {
 	}
 	// Build a Print-Job (0x0002) request envelope.
 	var buf bytes.Buffer
-	buf.Write([]byte{0x02, 0x00}) // version 2.0
+	buf.Write([]byte{0x02, 0x00})                        // version 2.0
 	binary.Write(&buf, binary.BigEndian, uint16(0x0002)) // operation
 	binary.Write(&buf, binary.BigEndian, uint32(1))      // request-id
 
