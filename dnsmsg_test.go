@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"net"
+	"testing"
+)
 
 func TestEncodeName(t *testing.T) {
 	got := encodeName("_ipp._tcp.local")
@@ -38,5 +41,38 @@ func TestParseNameCompressionPointer(t *testing.T) {
 	}
 	if next != len(buf) {
 		t.Fatalf("next=%d want=%d", next, len(buf))
+	}
+}
+
+func TestRdataSRV(t *testing.T) {
+	got := rdataSRV(0, 0, 631, "printcap.local")
+	want := append([]byte{0, 0, 0, 0, 0x02, 0x77}, encodeName("printcap.local")...)
+	if string(got) != string(want) {
+		t.Fatalf("rdataSRV\n got=%v\nwant=%v", got, want)
+	}
+}
+
+func TestRdataTXT(t *testing.T) {
+	got := rdataTXT([]string{"txtvers=1", "rp=ipp/print"})
+	want := []byte{9}
+	want = append(want, "txtvers=1"...)
+	want = append(want, 12)
+	want = append(want, "rp=ipp/print"...)
+	if string(got) != string(want) {
+		t.Fatalf("rdataTXT\n got=%v\nwant=%v", got, want)
+	}
+}
+
+func TestRdataA(t *testing.T) {
+	got := rdataA(net.IPv4(192, 168, 1, 50))
+	if len(got) != 4 || got[0] != 192 || got[3] != 50 {
+		t.Fatalf("rdataA got=%v", got)
+	}
+}
+
+func TestRdataAAAA(t *testing.T) {
+	got := rdataAAAA(net.ParseIP("fe80::1"))
+	if len(got) != 16 {
+		t.Fatalf("rdataAAAA len=%d", len(got))
 	}
 }
