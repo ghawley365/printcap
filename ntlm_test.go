@@ -94,6 +94,16 @@ func TestParseAuthenticatePanicProof(t *testing.T) {
 	binary.LittleEndian.PutUint16(bad[22:], 0xffff)     // NtResp MaxLen
 	binary.LittleEndian.PutUint32(bad[24:], 0xffffffff) // NtResp Offset
 	cases = append(cases, bad)
+	// 32-bit overflow trigger: Offset 0x7FFFFFFF stays positive as int32, so
+	// Offset+Len wraps negative on a 32-bit int and would slip past a naive
+	// `poff+flen > len` guard. Must be rejected without panicking.
+	ovf := make([]byte, 64)
+	copy(ovf, "NTLMSSP\x00")
+	binary.LittleEndian.PutUint32(ovf[8:], 3)
+	binary.LittleEndian.PutUint16(ovf[20:], 0xffff)     // NtResp Len
+	binary.LittleEndian.PutUint16(ovf[22:], 0xffff)     // NtResp MaxLen
+	binary.LittleEndian.PutUint32(ovf[24:], 0x7fffffff) // NtResp Offset
+	cases = append(cases, ovf)
 	for i, c := range cases {
 		if _, _, _, ok := parseAuthenticate(c); ok {
 			t.Fatalf("case %d: expected ok=false for malformed input", i)

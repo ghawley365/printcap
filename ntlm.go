@@ -170,11 +170,15 @@ func ntlmField(msg []byte, off int) (payload []byte, ok bool) {
 		return nil, false
 	}
 	flen := int(binary.LittleEndian.Uint16(msg[off:]))
-	poff := int(binary.LittleEndian.Uint32(msg[off+4:]))
-	if poff < 0 || flen < 0 || poff+flen > len(msg) {
+	// Offset is a 32-bit field; widen to int64 for the bound check so the sum
+	// can't overflow a 32-bit int and slip past the guard (this parses
+	// untrusted network input — see TestParseAuthenticatePanicProof).
+	poff := int64(binary.LittleEndian.Uint32(msg[off+4:]))
+	end := poff + int64(flen)
+	if end > int64(len(msg)) {
 		return nil, false
 	}
-	return msg[poff : poff+flen], true
+	return msg[poff:end], true
 }
 
 // parseAuthenticate parses an AUTHENTICATE_MESSAGE ([MS-NLMP] §2.2.1.3),
