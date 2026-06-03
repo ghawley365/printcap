@@ -1,6 +1,68 @@
 package main
 
-import "strings"
+import (
+	"bytes"
+	"regexp"
+	"strings"
+)
+
+// condMatcher is satisfied by *compiledCond (Task 3). A nil matcher always
+// applies.
+type condMatcher interface {
+	matches(j *job, data []byte) bool
+}
+
+type compiledStep struct {
+	kind  string         // inject_prefix | inject_suffix | replace
+	mode  string         // replace: literal | regex | hex
+	match []byte         // literal/hex match bytes
+	re    *regexp.Regexp // regex mode
+	with  []byte         // replacement (literal/hex)
+	withS string         // regex replacement template (supports $1)
+	all   bool
+	data  []byte      // inject_* bytes (already decoded)
+	when  condMatcher // nil = always
+}
+
+// applyTransforms runs steps in order over a copy of data.
+func applyTransforms(steps []compiledStep, data []byte, j *job) []byte {
+	out := append([]byte{}, data...)
+	for _, s := range steps {
+		if s.when != nil && !s.when.matches(j, out) {
+			logDebug("fwd", "skip transform %s (condition not met)", s.kind)
+			continue
+		}
+		before := len(out)
+		switch s.kind {
+		case "inject_prefix":
+			out = append(append([]byte{}, s.data...), out...)
+		case "inject_suffix":
+			out = append(out, s.data...)
+		case "replace":
+			out = applyReplace(s, out)
+		}
+		logDebug("fwd", "transform %s: %d -> %d bytes", s.kind, before, len(out))
+	}
+	return out
+}
+
+func applyReplace(s compiledStep, data []byte) []byte {
+	switch s.mode {
+	case "regex":
+		if s.re == nil {
+			return data
+		}
+		return s.re.ReplaceAll(data, []byte(s.withS))
+	default: // literal or hex — both already-decoded byte slices
+		if len(s.match) == 0 {
+			return data
+		}
+		if s.all {
+			return bytes.ReplaceAll(data, s.match, s.with)
+		}
+		return bytes.Replace(data, s.match, s.with, 1)
+	}
+}
 
 // decodeBytes resolves a configured byte string. A leading "macro:NAME" expands
 // to that macro's already-decoded bytes (empty if unknown). Otherwise it decodes
