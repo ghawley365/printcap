@@ -4,7 +4,18 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"io"
+	"net"
+	"net/http"
 )
+
+// maxWSDBody bounds the SOAP request body we will read, protecting memory
+// against oversized or hostile POSTs.
+const maxWSDBody = 32 << 20
+
+// wsprintDispatch is an optional hook for WSPrint (wprt) operations, wired in a
+// later stage. When non-nil it is consulted for actions the core dispatch does
+// not handle; if it returns (resp, true) the response is written verbatim.
+var wsprintDispatch func(env soapEnvelope, r *http.Request) ([]byte, bool)
 
 // deviceUUID derives a STABLE WSD device EPR (urn:uuid:...) from the host name,
 // so the same machine always presents the same WSD endpoint reference across
@@ -31,9 +42,62 @@ type wsdServer struct {
 // be started, so WSD failure never stops other listeners. The HTTP endpoint and
 // discovery responder are wired in later stages.
 func startWSD() *wsdServer {
-	// Protocol wiring lands in later stages; for now this is a no-op server so
-	// the Engine integration and config plumbing are testable independently.
-	return &wsdServer{}
+	w := &wsdServer{}
+	wsdEndpoint = wsdEndpointURL(cfg.Bind, cfg.WSD.Port)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/wsd", wsdHandler)
+
+	ln, err := net.Listen("tcp", net.JoinHostPort(cfg.Bind, itoa(cfg.WSD.Port)))
+	if err != nil {
+		logWarn("WSD", "SOAP listen %d: %v", cfg.WSD.Port, err)
+		return nil
+	}
+	srv := hardenedServer("", mux)
+	// Appending srv (not the listener) ensures Close() stops the HTTP server,
+	// which in turn closes the listener it is serving.
+	w.closers = append(w.closers, srv)
+	go func() { _ = srv.Serve(ln) }()
+	logInfo("WSD", "SOAP print service on %s", wsdEndpoint)
+
+	if cfg.WSD.Discovery {
+		if d := startWSDDiscovery(); d != nil {
+			w.closers = append(w.closers, d)
+		}
+	}
+	return w
+}
+
+// wsdHandler serves the WSD SOAP endpoint. It reads the (bounded) request body,
+// parses the SOAP envelope, and dispatches on the WS-Addressing Action. It never
+// panics on malformed input and always replies with a SOAP 1.2 message.
+func wsdHandler(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxWSDBody))
+	if err != nil {
+		http.Error(w, "read error", http.StatusBadRequest)
+		return
+	}
+	env, ok := parseSOAP(body)
+	if !ok {
+		http.Error(w, "bad SOAP", http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/soap+xml; charset=utf-8")
+
+	switch {
+	case env.Action == actTransferGet:
+		_, _ = w.Write(buildMetadataResponse(env.MessageID))
+		return
+	default:
+		if wsprintDispatch != nil {
+			if resp, handled := wsprintDispatch(env, r); handled {
+				_, _ = w.Write(resp)
+				return
+			}
+		}
+		_, _ = w.Write(soapFault(env.MessageID, "Sender", "wsa:ActionNotSupported", "Action not supported"))
+	}
 }
 
 // Close shuts the WSD service (sends WS-Discovery Bye in a later stage).
