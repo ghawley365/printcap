@@ -62,3 +62,22 @@ func TestWSPrintCreateThenSendCaptures(t *testing.T) {
 		t.Fatalf("captured job wrong: %+v data=%q", captured, captured.data)
 	}
 }
+
+func TestWSDPendingJobMapBounded(t *testing.T) {
+	cfg = defaultConfig()
+	wsdMu.Lock()
+	wsdJobs = map[int]*wsdPendingJob{}
+	wsdNextJob = 0
+	wsdMu.Unlock()
+	// Open many jobs without ever sending a document; the map must not grow
+	// past the cap.
+	for i := 0; i < maxPendingWSDJobs+50; i++ {
+		wsprintCreatePrintJob(soapEnvelope{Action: actCreatePrintJob, MessageID: "urn:uuid:x"})
+	}
+	wsdMu.Lock()
+	n := len(wsdJobs)
+	wsdMu.Unlock()
+	if n > maxPendingWSDJobs {
+		t.Fatalf("pending-job map unbounded: %d > %d", n, maxPendingWSDJobs)
+	}
+}

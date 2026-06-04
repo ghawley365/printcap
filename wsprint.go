@@ -27,6 +27,11 @@ const wprtNS = ` xmlns:wprt="` + nsWdpPrint + `"`
 // to capture without touching disk.
 var wsdCaptureJob = func(j *job) error { return sink.save(j) }
 
+// maxPendingWSDJobs caps the CreatePrintJob→SendDocument correlation map so a
+// client that opens jobs without ever sending a document cannot grow it without
+// bound. Each entry is only a few small strings; this is a generous ceiling.
+const maxPendingWSDJobs = 256
+
 // wsdPendingJob holds the metadata supplied by a CreatePrintJob until the
 // matching SendDocument arrives with the document bytes.
 type wsdPendingJob struct {
@@ -93,6 +98,19 @@ func wsprintCreatePrintJob(env soapEnvelope) []byte {
 	_ = xml.Unmarshal(env.BodyXML, &req)
 
 	wsdMu.Lock()
+	// Bound the pending-job map: a client that opens jobs (CreatePrintJob)
+	// without ever sending the document (SendDocument, which deletes the entry)
+	// would otherwise grow the map without limit. Evict the oldest pending jobs
+	// (lowest IDs — wsdNextJob is monotonic) once we exceed the cap.
+	for len(wsdJobs) >= maxPendingWSDJobs {
+		oldest := 0
+		for id := range wsdJobs {
+			if oldest == 0 || id < oldest {
+				oldest = id
+			}
+		}
+		delete(wsdJobs, oldest)
+	}
 	wsdNextJob++
 	jobID := wsdNextJob
 	wsdJobs[jobID] = &wsdPendingJob{
