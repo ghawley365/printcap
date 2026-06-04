@@ -71,6 +71,8 @@ func (e *Engine) Start() (int, error) {
 	sink = &captureSink{dir: captureDir()}
 	store = newJobStore(200)
 
+	rebuildDLP()
+
 	if cfg.Forward.Enabled {
 		if fw, err := newForwarder(cfg.Forward); err != nil {
 			e.logf("forward: %v", err)

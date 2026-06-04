@@ -98,6 +98,10 @@ func (s *captureSink) save(j *job) error {
 		fwdErr = forward.forward(j, original)
 	}
 
+	// dlpDecoded captures the EBCDIC-decoded text (if any) for DLP scanning
+	// below. It stays "" when EBCDIC decode didn't run or failed.
+	var dlpDecoded string
+
 	if page, carriage, on := resolveEBCDIC(j, j.data); on {
 		// Machine (FCFC) carriage-control is raw EBCDIC control bytes that decode
 		// would map away, so it MUST run on the raw bytes BEFORE decode. ASA/none/
@@ -110,6 +114,7 @@ func (s *captureSink) save(j *job) error {
 			if carriage != "machine" {
 				decoded = applyCarriageControl(decoded, carriage)
 			}
+			dlpDecoded = decoded // make available to DLP scan
 			j.CodePage = page
 			if cfg.EBCDIC.DecodedSidecar && cfg.mode() != saveMeta {
 				name := base + "-decoded.txt"
@@ -122,6 +127,13 @@ func (s *captureSink) save(j *job) error {
 			}
 		} else {
 			logWarn(j.Protocol, "EBCDIC decode skipped: unknown code page %q", page)
+		}
+	}
+
+	if cfg.DLP.Enabled {
+		if matches := scanDLP(j.data, dlpDecoded); len(matches) > 0 {
+			j.DLPMatches = matches
+			logWarn("DLP", "job %q from %s matched rule(s): %s", j.JobName, j.Source, strings.Join(matches, ", "))
 		}
 	}
 

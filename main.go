@@ -51,6 +51,7 @@ type job struct {
 	SavedAs   string `json:"saved_as,omitempty"`
 	data      []byte // not serialized; written to the raw file instead
 
+	DLPMatches   []string        `json:"dlp_matches,omitempty"`
 	Forwards     []forwardResult `json:"forwards,omitempty"`
 	captureBase  string          // set by sink.save (Task 8); base name for -sent files
 	captureExt   string          // set by sink.save (Task 8); chosen extension

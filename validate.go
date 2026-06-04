@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -50,6 +51,7 @@ func validateConfig(c *Config) []configIssue {
 	issues = append(issues, validateSyslog(c)...)
 	issues = append(issues, validateStorage(c)...)
 	issues = append(issues, validateBind(c)...)
+	issues = append(issues, validateDLP(c)...)
 	return issues
 }
 
@@ -350,6 +352,55 @@ func validateStorage(c *Config) []configIssue {
 		}
 		_ = f.Close()
 		_ = os.Remove(probe)
+	}
+	return issues
+}
+
+// validateDLP checks DLP rule definitions for completeness and compilability.
+func validateDLP(c *Config) []configIssue {
+	if !c.DLP.Enabled {
+		return nil
+	}
+	var issues []configIssue
+	for i, r := range c.DLP.Rules {
+		field := fmt.Sprintf("dlp.rules[%d]", i)
+		if strings.TrimSpace(r.Name) == "" {
+			issues = append(issues, configIssue{
+				Severity: sevWarning,
+				Field:    field + ".name",
+				Message:  "rule name is blank",
+				Fix:      "give the rule a descriptive name so matches can be identified in logs and job metadata",
+			})
+		}
+		mode := strings.ToLower(r.Mode)
+		if mode != "keyword" && mode != "regex" {
+			issues = append(issues, configIssue{
+				Severity: sevError,
+				Field:    field + ".mode",
+				Message:  fmt.Sprintf("invalid mode %q", r.Mode),
+				Fix:      "use one of: keyword | regex",
+			})
+			continue // no point checking the pattern if the mode is unknown
+		}
+		if strings.TrimSpace(r.Pattern) == "" {
+			issues = append(issues, configIssue{
+				Severity: sevError,
+				Field:    field + ".pattern",
+				Message:  "pattern is blank",
+				Fix:      "set pattern to the keyword substring or regular expression to match",
+			})
+			continue
+		}
+		if mode == "regex" {
+			if _, err := regexp.Compile(r.Pattern); err != nil {
+				issues = append(issues, configIssue{
+					Severity: sevError,
+					Field:    field + ".pattern",
+					Message:  fmt.Sprintf("regex does not compile: %v", err),
+					Fix:      "fix the regular expression",
+				})
+			}
+		}
 	}
 	return issues
 }

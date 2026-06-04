@@ -48,6 +48,22 @@ type Config struct {
 	SMB       SMBConf     `json:"smb"`
 	WSD       WSDConf     `json:"wsd"`
 	Storage   StorageConf `json:"storage"`
+	DLP       DLPConf     `json:"dlp"`
+}
+
+// DLPConf scans captured documents for sensitive content and raises an alert
+// (logged + tagged on the job). Inspection only — it never blocks capture.
+type DLPConf struct {
+	Enabled bool      `json:"enabled"`
+	Rules   []DLPRule `json:"rules"`
+}
+
+// DLPRule matches captured content. Mode: "keyword" (case-insensitive substring)
+// or "regex" (RE2). Name labels the match on the job and in the alert log.
+type DLPRule struct {
+	Name    string `json:"name"`
+	Mode    string `json:"mode"` // keyword | regex
+	Pattern string `json:"pattern"`
 }
 
 // EBCDICConf controls decoding of EBCDIC (mainframe) print streams into a
@@ -364,6 +380,10 @@ func defaultConfig() *Config {
 			Discovery: true,
 		},
 		Storage: StorageConf{SpoolDir: ""}, // empty = <exe-dir>/spool
+		DLP: DLPConf{
+			Enabled: false,
+			Rules:   []DLPRule{},
+		},
 		Forward: ForwardConf{
 			Enabled: false,
 			Capture: "both",
