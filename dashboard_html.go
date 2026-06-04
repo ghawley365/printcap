@@ -192,7 +192,7 @@ function renderListeners(ls){
     b.onclick=function(){
       var name=b.getAttribute('data-name');var en=b.getAttribute('data-en');
       if(!confirm((en==='true'?'Enable':'Disable')+' '+name+'? The engine will bounce and the dashboard may briefly drop.'))return;
-      fetch('api/listener?name='+encodeURIComponent(name)+'&enabled='+en,{method:'POST'});
+      fetch('api/listener?name='+encodeURIComponent(name)+'&enabled='+en,{method:'POST',headers:{'X-Requested-With':'printcap'}});
     };
   });
 }
@@ -256,7 +256,7 @@ function renderJobs(){
       b.onclick=function(e){e.stopPropagation();
         var id=b.getAttribute('data-del');
         if(!confirm('Delete job '+id+' and its files? This cannot be undone.'))return;
-        fetch('api/jobdelete?id='+id,{method:'POST'}).then(function(){loadJobs();});
+        fetch('api/jobdelete?id='+id,{method:'POST',headers:{'X-Requested-With':'printcap'}}).then(function(){loadJobs();});
       };
     });
   }
@@ -329,7 +329,7 @@ function refreshLogs(){
 }
 document.getElementById('loglevel').addEventListener('change',function(){
   // set the server's live level to match what we want to view, then refresh
-  fetch('api/loglevel?level='+encodeURIComponent(this.value),{method:'POST'}).catch(function(){});
+  fetch('api/loglevel?level='+encodeURIComponent(this.value),{method:'POST',headers:{'X-Requested-With':'printcap'}}).catch(function(){});
   refreshLogs();
 });
 
@@ -341,9 +341,9 @@ document.getElementById('pageSize').addEventListener('change',function(){state.l
 document.getElementById('prev').onclick=function(){state.offset=Math.max(0,state.offset-state.limit);loadJobs();};
 document.getElementById('next').onclick=function(){if(state.offset+state.limit<state.total){state.offset+=state.limit;loadJobs();}};
 document.getElementById('refreshBtn').onclick=function(){loadStatsOnce();loadJobs();refreshLogs();};
-document.getElementById('engStart').onclick=function(){if(confirm('Start the engine?'))fetch('api/control?action=start',{method:'POST'});};
-document.getElementById('engRestart').onclick=function(){if(confirm('Restart the engine? The dashboard will briefly drop.'))fetch('api/control?action=restart',{method:'POST'});};
-document.getElementById('engStop').onclick=function(){if(confirm('Stop the engine? The dashboard will drop and not come back until restarted.'))fetch('api/control?action=stop',{method:'POST'});};
+document.getElementById('engStart').onclick=function(){if(confirm('Start the engine?'))fetch('api/control?action=start',{method:'POST',headers:{'X-Requested-With':'printcap'}});};
+document.getElementById('engRestart').onclick=function(){if(confirm('Restart the engine? The dashboard will briefly drop.'))fetch('api/control?action=restart',{method:'POST',headers:{'X-Requested-With':'printcap'}});};
+document.getElementById('engStop').onclick=function(){if(confirm('Stop the engine? The dashboard will drop and not come back until restarted.'))fetch('api/control?action=stop',{method:'POST',headers:{'X-Requested-With':'printcap'}});};
 
 // ---- live SSE ----
 function startSSE(){

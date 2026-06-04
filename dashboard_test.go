@@ -151,7 +151,7 @@ func TestApiJobDelete(t *testing.T) {
 	must("j1.json")
 	must("j1-sent-raw.bin")
 
-	req := httptest.NewRequest("POST", "/api/jobdelete?id=1", nil)
+	req := csrfPost("/api/jobdelete?id=1")
 	rec := httptest.NewRecorder()
 	apiJobDelete(rec, req)
 	if rec.Code != 200 {
@@ -173,7 +173,7 @@ func TestApiJobDelete(t *testing.T) {
 	if err := os.WriteFile(outside, []byte("keep"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	req = httptest.NewRequest("POST", "/api/jobdelete?id=9", nil)
+	req = csrfPost("/api/jobdelete?id=9")
 	rec = httptest.NewRecorder()
 	apiJobDelete(rec, req)
 	if _, err := os.Stat(outside); err != nil {
@@ -242,7 +242,7 @@ func TestApiLogLevel(t *testing.T) {
 	orig := logger.Level()
 	defer logger.SetLevel(orig)
 
-	req := httptest.NewRequest("POST", "/api/loglevel?level=debug", nil)
+	req := csrfPost("/api/loglevel?level=debug")
 	rec := httptest.NewRecorder()
 	apiLogLevel(rec, req)
 	if rec.Code != 200 {
@@ -252,7 +252,7 @@ func TestApiLogLevel(t *testing.T) {
 		t.Fatalf("level not set: %v", logger.Level())
 	}
 
-	req = httptest.NewRequest("POST", "/api/loglevel?level=bogus", nil)
+	req = csrfPost("/api/loglevel?level=bogus")
 	rec = httptest.NewRecorder()
 	apiLogLevel(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -272,7 +272,7 @@ func TestApiControl(t *testing.T) {
 	defer func() { engineAction = orig }()
 
 	for _, action := range []string{"stop", "start", "restart"} {
-		req := httptest.NewRequest("POST", "/api/control?action="+action, nil)
+		req := csrfPost("/api/control?action=" + action)
 		rec := httptest.NewRecorder()
 		apiControl(rec, req)
 		if rec.Code != 200 {
@@ -285,7 +285,7 @@ func TestApiControl(t *testing.T) {
 		}
 	}
 	// bad action -> 400.
-	req := httptest.NewRequest("POST", "/api/control?action=nuke", nil)
+	req := csrfPost("/api/control?action=nuke")
 	rec := httptest.NewRecorder()
 	apiControl(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -293,7 +293,7 @@ func TestApiControl(t *testing.T) {
 	}
 
 	// /api/listener responds ok without blocking.
-	req = httptest.NewRequest("POST", "/api/listener?name=IPP&enabled=false", nil)
+	req = csrfPost("/api/listener?name=IPP&enabled=false")
 	rec = httptest.NewRecorder()
 	apiListener(rec, req)
 	if rec.Code != 200 {
@@ -303,4 +303,34 @@ func TestApiControl(t *testing.T) {
 		t.Fatal("IPP not marked disabled")
 	}
 	setListenerDisabled("IPP", false) // reset shared state
+}
+
+// csrfPost builds a POST request carrying the CSRF guard header so the
+// state-changing dashboard handlers accept it (mirrors the frontend).
+func csrfPost(target string) *http.Request {
+	req := httptest.NewRequest("POST", target, nil)
+	req.Header.Set("X-Requested-With", "printcap")
+	return req
+}
+
+func TestCSRFGuardRejectsMissingHeader(t *testing.T) {
+	dashTestSetup(t)
+	// A POST without the X-Requested-With header must be rejected (403) on every
+	// state-changing endpoint — blocks drive-by cross-origin requests.
+	for _, target := range []string{"/api/control?action=stop", "/api/listener?name=IPP&enabled=false", "/api/jobdelete?id=1", "/api/loglevel?level=debug"} {
+		req := httptest.NewRequest("POST", target, nil) // NO csrf header
+		rec := httptest.NewRecorder()
+		dashboardHandler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s without CSRF header: got %d, want 403", target, rec.Code)
+		}
+	}
+}
+
+func TestCSVSafe(t *testing.T) {
+	for in, want := range map[string]string{"=cmd()": "'=cmd()", "+1": "'+1", "-2": "'-2", "@x": "'@x", "normal": "normal", "": ""} {
+		if got := csvSafe(in); got != want {
+			t.Fatalf("csvSafe(%q)=%q want %q", in, got, want)
+		}
+	}
 }

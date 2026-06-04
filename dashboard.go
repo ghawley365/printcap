@@ -47,6 +47,7 @@ func apiLogFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer f.Close()
+	safeServeHeaders(w)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Content-Disposition", "attachment; filename=\""+filepath.Base(path)+"\"")
 	http.ServeContent(w, r, filepath.Base(path), time.Time{}, f)
@@ -175,8 +176,34 @@ func apiJobPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer f.Close()
+	// Captured bytes are attacker-controlled; stop the browser from MIME-sniffing
+	// them into HTML/JS that would run in the dashboard origin.
+	safeServeHeaders(w)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", "inline; filename=\"preview.txt\"")
 	io.CopyN(w, f, 64*1024)
+}
+
+// csrfGuard requires a custom request header on state-changing endpoints. A
+// browser cannot set a custom header on a cross-origin "simple" request without
+// triggering a CORS preflight, which this server never grants — so a malicious
+// site the operator visits cannot drive-by POST to the (unauthenticated, local)
+// dashboard. Returns false (and writes 403) if the header is absent.
+func csrfGuard(w http.ResponseWriter, r *http.Request) bool {
+	if r.Header.Get("X-Requested-With") != "printcap" {
+		http.Error(w, "missing X-Requested-With: printcap header", http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
+// safeServeHeaders hardens responses that serve attacker-controlled file bytes
+// (captured spool data, logs): disable MIME-sniffing and forbid any active
+// content, so a malicious captured document cannot become stored XSS in the
+// dashboard origin.
+func safeServeHeaders(w http.ResponseWriter) {
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
 }
 
 // apiJobDelete removes a job from the store and deletes its on-disk artifacts:
@@ -185,6 +212,9 @@ func apiJobPreview(w http.ResponseWriter, r *http.Request) {
 func apiJobDelete(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !csrfGuard(w, r) {
 		return
 	}
 	id, _ := strconv.Atoi(r.URL.Query().Get("id"))
@@ -242,13 +272,30 @@ func apiExport(w http.ResponseWriter, r *http.Request) {
 	cw := csv.NewWriter(w)
 	cw.Write([]string{"id", "received", "protocol", "source", "user", "host", "job_name", "bytes", "pdl", "dlp_matches", "saved_as"})
 	for _, j := range jobs {
+		// Job fields (name/user/host/source/…) are attacker-controlled (anyone
+		// can send a print job); csvSafe neutralizes spreadsheet formula
+		// injection when the operator opens the export in Excel/Sheets.
 		cw.Write([]string{
-			strconv.Itoa(j.ID), j.Received, j.Protocol, j.Source, j.User, j.Host,
-			j.JobName, strconv.Itoa(j.Bytes), j.PDL,
-			strings.Join(j.DLPMatches, "; "), j.SavedAs,
+			strconv.Itoa(j.ID), csvSafe(j.Received), csvSafe(j.Protocol), csvSafe(j.Source), csvSafe(j.User), csvSafe(j.Host),
+			csvSafe(j.JobName), strconv.Itoa(j.Bytes), csvSafe(j.PDL),
+			csvSafe(strings.Join(j.DLPMatches, "; ")), csvSafe(j.SavedAs),
 		})
 	}
 	cw.Flush()
+}
+
+// csvSafe neutralizes CSV/spreadsheet formula injection: a cell beginning with
+// =, +, -, @, tab, or CR is treated as a formula by Excel/Sheets, so we prefix
+// such values with a single quote to force them to be read as text.
+func csvSafe(s string) string {
+	if s == "" {
+		return s
+	}
+	switch s[0] {
+	case '=', '+', '-', '@', '\t', '\r':
+		return "'" + s
+	}
+	return s
 }
 
 // apiListeners returns the runtime status of every configured listener.
@@ -268,6 +315,9 @@ func apiListeners(w http.ResponseWriter, r *http.Request) {
 func apiControl(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !csrfGuard(w, r) {
 		return
 	}
 	action := r.URL.Query().Get("action")
@@ -313,6 +363,9 @@ func apiListener(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if !csrfGuard(w, r) {
+		return
+	}
 	name := r.URL.Query().Get("name")
 	if name == "" {
 		http.Error(w, "missing name", http.StatusBadRequest)
@@ -328,6 +381,9 @@ func apiListener(w http.ResponseWriter, r *http.Request) {
 func apiLogLevel(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !csrfGuard(w, r) {
 		return
 	}
 	lv := r.URL.Query().Get("level")
@@ -452,6 +508,7 @@ func apiJobData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer f.Close()
+	safeServeHeaders(w)
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", "attachment; filename=\""+filepath.Base(j.SavedAs)+"\"")
 	http.ServeContent(w, r, j.SavedAs, time.Time{}, f)
