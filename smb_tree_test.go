@@ -83,6 +83,89 @@ func createRespFileID(resp []byte) [16]byte {
 	return fid
 }
 
+// buildCreateRequestOnTree is buildCreateRequest with the request header TreeId
+// set to treeID, so handleCreate routes against that tree.
+func buildCreateRequestOnTree(treeID uint32, name string) []byte {
+	req := buildCreateRequest(name)
+	binary.LittleEndian.PutUint32(req[36:40], treeID)
+	return req
+}
+
+// buildWriteRequestOnTree is buildWriteRequest with the request header TreeId
+// set to treeID.
+func buildWriteRequestOnTree(treeID uint32, fid [16]byte, data []byte) []byte {
+	req := buildWriteRequest(fid, data)
+	binary.LittleEndian.PutUint32(req[36:40], treeID)
+	return req
+}
+
+// buildCloseRequest builds an SMB2 CLOSE request ([MS-SMB2] §2.2.15):
+// StructureSize=24, Flags(2), Reserved(4), FileId(16 @ body offset 8).
+func buildCloseRequest(fid [16]byte) []byte {
+	hdr := smb2Header{Command: smb2Close}.encode()
+	body := make([]byte, 24)
+	binary.LittleEndian.PutUint16(body[0:2], 24) // StructureSize
+	// Flags@2, Reserved@4 = 0
+	copy(body[8:24], fid[:])
+	return append(hdr, body...)
+}
+
+// buildCloseRequestOnTree is buildCloseRequest with the request header TreeId
+// set to treeID.
+func buildCloseRequestOnTree(treeID uint32, fid [16]byte) []byte {
+	req := buildCloseRequest(fid)
+	binary.LittleEndian.PutUint32(req[36:40], treeID)
+	return req
+}
+
+func TestPrintShareCaptureFlow(t *testing.T) {
+	cfg = defaultConfig()
+	cfg.SMB.ShareName = "PRINTER"
+	var captured *job
+	old := smbCaptureJob
+	smbCaptureJob = func(j *job) error { captured = j; return nil }
+	defer func() { smbCaptureJob = old }()
+
+	s := newSMBSession()
+	s.user = "alice"
+	s.remoteAddr = "10.0.0.9:5000"
+
+	// TREE_CONNECT to the PRINTER share → ShareType PRINT (0x03).
+	tcResp, st, ok := handleTreeConnect(s, buildTreeConnectRequest(`\\PRINTCAP\PRINTER`))
+	if !ok || st != statusSuccess {
+		t.Fatalf("PRINTER tree connect failed st=0x%08x", st)
+	}
+	if tcResp[66] != 0x03 {
+		t.Fatalf("ShareType=0x%02x want 0x03 (PRINT)", tcResp[66])
+	}
+	tcHdr, _ := parseSMB2Header(tcResp)
+	treeID := tcHdr.TreeId
+
+	// CREATE a spool file on the print tree (arbitrary name, not "spoolss").
+	crResp, st2, ok2 := handleCreate(s, buildCreateRequestOnTree(treeID, "MyDocument.pcl"))
+	if !ok2 || st2 != statusSuccess {
+		t.Fatalf("print CREATE failed st=0x%08x", st2)
+	}
+	fid := createRespFileID(crResp)
+
+	// WRITE the spool data, then CLOSE → job captured.
+	if _, st3, _ := handleWrite(s, buildWriteRequestOnTree(treeID, fid, []byte("PCLSPOOL"))); st3 != statusSuccess {
+		t.Fatalf("print WRITE failed st=0x%08x", st3)
+	}
+	if _, st4, _ := handleClose(s, buildCloseRequestOnTree(treeID, fid)); st4 != statusSuccess {
+		t.Fatalf("print CLOSE failed st=0x%08x", st4)
+	}
+	if captured == nil {
+		t.Fatal("no print job captured")
+	}
+	if captured.Protocol != "SMB" || string(captured.data) != "PCLSPOOL" {
+		t.Fatalf("job=%+v data=%q", captured, captured.data)
+	}
+	if captured.JobName != "MyDocument.pcl" || captured.User != "alice" {
+		t.Fatalf("JobName=%q User=%q", captured.JobName, captured.User)
+	}
+}
+
 func TestTreeConnectIPC(t *testing.T) {
 	s := newSMBSession()
 	req := buildTreeConnectRequest(`\\PRINTCAP\IPC$`)

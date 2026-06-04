@@ -53,6 +53,13 @@ type pipeHandle struct {
 	fileID  [16]byte
 	backend pipeBackend
 	readBuf []byte // pending bytes for READ
+
+	// Print-share spool state. When printSpool is set the handle is an open
+	// spool file on a PRINT tree (not a \spoolss DCERPC pipe): writes are
+	// accumulated in spoolBuf and captured as a job on CLOSE.
+	printSpool bool
+	docName    string
+	spoolBuf   []byte
 }
 
 // newSpoolssBackend builds the DCERPC/spoolss backend for a new \spoolss handle.
@@ -121,7 +128,12 @@ func handleTreeConnect(s *smbSession, req []byte) (resp []byte, status uint32, o
 	if i := strings.LastIndexByte(path, '\\'); i >= 0 {
 		share = path[i+1:]
 	}
-	if !strings.EqualFold(share, "IPC$") {
+	// IPC$ is the named-pipe (spoolss RPC) share; the configured share name
+	// (e.g. "PRINTER") is the classic SMB print share that smbclient writes the
+	// spool file to. Anything else is unknown.
+	isPipe := strings.EqualFold(share, "IPC$")
+	isPrint := strings.EqualFold(share, cfg.SMB.ShareName)
+	if !isPipe && !isPrint {
 		return buildErrorResponse(reqHdr, smb2TreeConnect, statusObjectNameNotFound), statusObjectNameNotFound, false
 	}
 
@@ -135,6 +147,15 @@ func handleTreeConnect(s *smbSession, req []byte) (resp []byte, status uint32, o
 	}
 	s.trees[treeID] = path
 
+	shareType := smb2ShareTypePipe
+	if isPrint {
+		shareType = smb2ShareTypePrint
+		if s.printTrees == nil {
+			s.printTrees = make(map[uint32]bool)
+		}
+		s.printTrees[treeID] = true
+	}
+
 	respHdr := smb2Header{
 		Command:    smb2TreeConnect,
 		Status:     statusSuccess,
@@ -146,7 +167,7 @@ func handleTreeConnect(s *smbSession, req []byte) (resp []byte, status uint32, o
 	}
 	rbody := make([]byte, treeConnectRespStructureSize)
 	binary.LittleEndian.PutUint16(rbody[0:2], treeConnectRespStructureSize)
-	rbody[2] = smb2ShareTypePipe // ShareType
+	rbody[2] = shareType // ShareType
 	// rbody[3] Reserved = 0
 	// rbody[4:8] ShareFlags = 0
 	// rbody[8:12] Capabilities = 0
@@ -180,7 +201,11 @@ func handleCreate(s *smbSession, req []byte) (resp []byte, status uint32, ok boo
 		name = parseUTF16LE(req[nameOff:end])
 	}
 	name = strings.TrimPrefix(name, "\\")
-	if !strings.EqualFold(name, "spoolss") {
+
+	// On a PRINT tree the CREATE opens the spool/document file under any name;
+	// on the IPC$ tree only the \spoolss DCERPC pipe is accepted.
+	isPrintTree := s.printTrees != nil && s.printTrees[reqHdr.TreeId]
+	if !isPrintTree && !strings.EqualFold(name, "spoolss") {
 		return buildErrorResponse(reqHdr, smb2Create, statusAccessDenied), statusAccessDenied, false
 	}
 
@@ -191,7 +216,12 @@ func handleCreate(s *smbSession, req []byte) (resp []byte, status uint32, ok boo
 			fid[i] = byte(i + 1)
 		}
 	}
-	h := &pipeHandle{fileID: fid, backend: newSpoolssBackend(s)}
+	var h *pipeHandle
+	if isPrintTree {
+		h = &pipeHandle{fileID: fid, printSpool: true, docName: name}
+	} else {
+		h = &pipeHandle{fileID: fid, backend: newSpoolssBackend(s)}
+	}
 	if s.handles == nil {
 		s.handles = make(map[string]*pipeHandle)
 	}
@@ -257,7 +287,11 @@ func handleWrite(s *smbSession, req []byte) (resp []byte, status uint32, ok bool
 		return buildErrorResponse(reqHdr, smb2Write, statusAccessDenied), statusAccessDenied, false
 	}
 	data := req[dataOff:end]
-	if h.backend != nil {
+	if h.printSpool {
+		// Print-share spool write: accumulate the raw spool bytes for capture
+		// on CLOSE; there is no DCERPC backend to shuttle through.
+		h.spoolBuf = append(h.spoolBuf, data...)
+	} else if h.backend != nil {
 		if out := h.backend.onWrite(data); out != nil {
 			h.readBuf = append(h.readBuf, out...)
 		}
@@ -355,6 +389,16 @@ func handleClose(s *smbSession, req []byte) (resp []byte, status uint32, ok bool
 	if !found {
 		return buildErrorResponse(reqHdr, smb2Close, statusAccessDenied), statusAccessDenied, false
 	}
+	// On a print-spool handle, CLOSE finalizes the document: capture the spooled
+	// bytes as a job before discarding the handle.
+	if h.printSpool && len(h.spoolBuf) > 0 {
+		j := newJob("SMB", s.remoteAddr)
+		j.JobName = h.docName
+		j.User = s.user
+		j.data = h.spoolBuf
+		j.Bytes = len(h.spoolBuf)
+		_ = smbCaptureJob(j)
+	}
 	delete(s.handles, fileIDKey(h.fileID))
 
 	respHdr := smb2Header{
@@ -370,4 +414,59 @@ func handleClose(s *smbSession, req []byte) (resp []byte, status uint32, ok bool
 	rbody := make([]byte, closeRespStructureSize)
 	binary.LittleEndian.PutUint16(rbody[0:2], closeRespStructureSize)
 	return append(respHdr.encode(), rbody...), statusSuccess, true
+}
+
+// buildSimpleAck builds an SMB2 response with a 4-byte fixed body of
+// StructureSize(2)=4, Reserved(2)=0 — the shape shared by TREE_DISCONNECT
+// (§2.2.12), LOGOFF (§2.2.8), and FLUSH (§2.2.18) responses.
+func buildSimpleAck(reqHdr smb2Header, command uint16) []byte {
+	respHdr := smb2Header{
+		Command:    command,
+		Status:     statusSuccess,
+		Flags:      reqHdr.Flags | smb2FlagsServerToRedir,
+		CreditResp: 1,
+		MessageId:  reqHdr.MessageId,
+		SessionId:  reqHdr.SessionId,
+		TreeId:     reqHdr.TreeId,
+	}
+	rbody := make([]byte, 4)
+	binary.LittleEndian.PutUint16(rbody[0:2], 4) // StructureSize
+	// rbody[2:4] Reserved = 0
+	return append(respHdr.encode(), rbody...)
+}
+
+// handleTreeDisconnect processes an SMB2 TREE_DISCONNECT ([MS-SMB2] §2.2.11),
+// tears down the referenced tree, and returns the §2.2.12 success response.
+func handleTreeDisconnect(s *smbSession, req []byte) (resp []byte, status uint32, ok bool) {
+	reqHdr, hok := parseSMB2Header(req)
+	if !hok || reqHdr.Command != smb2TreeDisconnect {
+		return buildErrorResponse(reqHdr, smb2TreeDisconnect, statusInvalidParameter), statusInvalidParameter, false
+	}
+	if s.trees != nil {
+		delete(s.trees, reqHdr.TreeId)
+	}
+	if s.printTrees != nil {
+		delete(s.printTrees, reqHdr.TreeId)
+	}
+	return buildSimpleAck(reqHdr, smb2TreeDisconnect), statusSuccess, true
+}
+
+// handleLogoff processes an SMB2 LOGOFF ([MS-SMB2] §2.2.7) and returns the
+// §2.2.8 success response.
+func handleLogoff(s *smbSession, req []byte) (resp []byte, status uint32, ok bool) {
+	reqHdr, hok := parseSMB2Header(req)
+	if !hok || reqHdr.Command != smb2Logoff {
+		return buildErrorResponse(reqHdr, smb2Logoff, statusInvalidParameter), statusInvalidParameter, false
+	}
+	return buildSimpleAck(reqHdr, smb2Logoff), statusSuccess, true
+}
+
+// handleFlush processes an SMB2 FLUSH ([MS-SMB2] §2.2.17) and returns the
+// §2.2.18 success response.
+func handleFlush(s *smbSession, req []byte) (resp []byte, status uint32, ok bool) {
+	reqHdr, hok := parseSMB2Header(req)
+	if !hok || reqHdr.Command != smb2Flush {
+		return buildErrorResponse(reqHdr, smb2Flush, statusInvalidParameter), statusInvalidParameter, false
+	}
+	return buildSimpleAck(reqHdr, smb2Flush), statusSuccess, true
 }

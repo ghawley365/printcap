@@ -106,9 +106,25 @@ func handleSMBConn(c net.Conn) {
 				return
 			}
 			resp, _, _ = handleClose(s, msg)
+		case smb2TreeDisconnect:
+			if s == nil || !s.authComplete {
+				return
+			}
+			resp, _, _ = handleTreeDisconnect(s, msg)
+		case smb2Logoff:
+			if s == nil || !s.authComplete {
+				return
+			}
+			resp, _, _ = handleLogoff(s, msg)
+		case smb2Flush:
+			if s == nil || !s.authComplete {
+				return
+			}
+			resp, _, _ = handleFlush(s, msg)
 		default:
-			// Unsupported command: ignore and keep looping.
-			continue
+			// Unsupported command: respond with STATUS_NOT_SUPPORTED so the
+			// client never hangs waiting on a reply it expects.
+			resp = buildErrorResponse(reqHdr, reqHdr.Command, statusNotSupported)
 		}
 
 		if len(resp) < smb2HeaderSize {

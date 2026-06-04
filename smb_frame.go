@@ -10,14 +10,17 @@ import (
 // SMB2 command constants ([MS-SMB2] §2.2.1.2 Command field). Several are not
 // yet referenced; later SMB2 stages consume them.
 const (
-	smb2Negotiate    uint16 = 0x0000
-	smb2SessionSetup uint16 = 0x0001
-	smb2TreeConnect  uint16 = 0x0003
-	smb2Create       uint16 = 0x0005
-	smb2Close        uint16 = 0x0006
-	smb2Write        uint16 = 0x0009
-	smb2Read         uint16 = 0x0008
-	smb2Ioctl        uint16 = 0x000B
+	smb2Negotiate      uint16 = 0x0000
+	smb2SessionSetup   uint16 = 0x0001
+	smb2Logoff         uint16 = 0x0002
+	smb2TreeConnect    uint16 = 0x0003
+	smb2TreeDisconnect uint16 = 0x0004
+	smb2Create         uint16 = 0x0005
+	smb2Close          uint16 = 0x0006
+	smb2Flush          uint16 = 0x0007
+	smb2Write          uint16 = 0x0009
+	smb2Read           uint16 = 0x0008
+	smb2Ioctl          uint16 = 0x000B
 )
 
 // smb2FlagsServerToRedir marks a packet as a server-to-client response
@@ -30,6 +33,7 @@ const (
 	statusMoreProcessingRequired uint32 = 0xC0000016
 	statusAccessDenied           uint32 = 0xC0000022
 	statusPending                uint32 = 0x00000103
+	statusNotSupported           uint32 = 0xC00000BB
 )
 
 // smb2ProtocolID is the SMB2 ProtocolId magic: 0xFE 'S' 'M' 'B'.

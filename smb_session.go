@@ -34,6 +34,7 @@ type smbSession struct {
 	// maps an assigned TreeId to its share path; handles maps the hex of an
 	// open FileId to its \spoolss pipe instance.
 	trees      map[uint32]string
+	printTrees map[uint32]bool // TreeIds that are PRINT shares (spool capture).
 	nextTreeID uint32
 	handles    map[string]*pipeHandle
 
@@ -67,9 +68,10 @@ const serverComputerName = "PRINTCAP"
 // zeroed 64-byte preauth-integrity hash.
 func newSMBSession() *smbSession {
 	s := &smbSession{
-		preauth: make([]byte, 64),
-		trees:   make(map[uint32]string),
-		handles: make(map[string]*pipeHandle),
+		preauth:    make([]byte, 64),
+		trees:      make(map[uint32]string),
+		printTrees: make(map[uint32]bool),
+		handles:    make(map[string]*pipeHandle),
 	}
 	for {
 		var id [8]byte
