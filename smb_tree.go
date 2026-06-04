@@ -289,8 +289,11 @@ func handleWrite(s *smbSession, req []byte) (resp []byte, status uint32, ok bool
 	data := req[dataOff:end]
 	if h.printSpool {
 		// Print-share spool write: accumulate the raw spool bytes for capture
-		// on CLOSE; there is no DCERPC backend to shuttle through.
-		h.spoolBuf = append(h.spoolBuf, data...)
+		// on CLOSE; there is no DCERPC backend to shuttle through. Bound the
+		// retained buffer by the per-job cap so a client cannot exhaust memory
+		// (we still ACK the full write; bytes past the cap are simply dropped,
+		// matching the read-time bound on the Raw/LPD paths).
+		h.spoolBuf = appendCapped(h.spoolBuf, data, jobByteCap())
 	} else if h.backend != nil {
 		if out := h.backend.onWrite(data); out != nil {
 			h.readBuf = append(h.readBuf, out...)

@@ -169,7 +169,9 @@ func realSpoolssDispatcher(s *smbSession) rpcDispatcher {
 			if !ok {
 				return nil, false
 			}
-			st.buf = append(st.buf, data...)
+			// Bound the retained spool buffer by the per-job cap (still report
+			// the full count as written; bytes past the cap are dropped).
+			st.buf = appendCapped(st.buf, data, jobByteCap())
 			// [out]: pcWritten(4)=len, return code(4)=0.
 			resp := make([]byte, 8)
 			binary.LittleEndian.PutUint32(resp[0:4], uint32(len(data)))

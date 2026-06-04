@@ -24,10 +24,15 @@ func serveSMB(ln net.Listener) {
 func handleSMBConn(c net.Conn) {
 	defer c.Close()
 
+	// Read through an idle-deadline wrapper so a half-open or slow client
+	// (e.g. a partial Direct-TCP prefix then stall) cannot park this goroutine
+	// forever — same discipline as the LPD/Raw listeners (limits.go).
+	rc := idleConn{Conn: c, idle: idleReadTimeout}
+
 	var s *smbSession
 
 	for {
-		frame, err := readTCPFrame(c)
+		frame, err := readTCPFrame(rc)
 		if err != nil {
 			return
 		}
