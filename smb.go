@@ -33,6 +33,7 @@ func handleSMBConn(c net.Conn) {
 		}
 
 		msg := frame
+		reqEncrypted := false
 		// SMB3 encrypted message? TRANSFORM_HEADER starts with 0xFD 'S' 'M' 'B'.
 		if len(frame) >= 4 && frame[0] == 0xFD && frame[1] == 'S' && frame[2] == 'M' && frame[3] == 'B' {
 			if s == nil || len(s.c2sKey) != 16 {
@@ -43,6 +44,7 @@ func handleSMBConn(c net.Conn) {
 				return
 			}
 			msg = pt
+			reqEncrypted = true
 		}
 
 		reqHdr, ok := parseSMB2Header(msg)
@@ -159,8 +161,11 @@ func handleSMBConn(c net.Conn) {
 		}
 
 		out := resp
-		// Encrypt after auth if the session enabled encryption.
-		if s != nil && s.authComplete && s.encryptData && len(s.s2cKey) == 16 {
+		// Encrypt the response only if the request itself arrived encrypted
+		// (mirror the client). The SESSION_SETUP responses are never encrypted —
+		// encryption begins on the traffic AFTER the session is established, and
+		// the client cannot decrypt before it has confirmed the session.
+		if reqEncrypted && s != nil && len(s.s2cKey) == 16 {
 			if enc, err := smbEncrypt(s.s2cKey, s.sessionID, resp); err == nil {
 				out = enc
 			}
