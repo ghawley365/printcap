@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 )
 
@@ -372,9 +371,4 @@ func writeEnumSet(buf *bytes.Buffer, name string, vals ...int32) {
 		binary.BigEndian.PutUint32(v, uint32(n))
 		writeAttr(buf, tagEnum, nm, v)
 	}
-}
-
-// addr formats a bind address from the configured interface and a port.
-func addr(port int) string {
-	return net.JoinHostPort(cfg.Bind, itoa(port))
 }

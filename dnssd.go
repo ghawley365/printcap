@@ -33,15 +33,6 @@ type boundListeners struct {
 	Dash    int
 }
 
-func containsStr(xs []string, want string) bool {
-	for _, x := range xs {
-		if x == want {
-			return true
-		}
-	}
-	return false
-}
-
 func boolTF(b bool) string {
 	if b {
 		return "T"
