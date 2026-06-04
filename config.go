@@ -29,27 +29,28 @@ const (
 // defaultConfig(); a -config file overlays onto them; explicit flags override
 // last. Use -dump-config to write the effective config as a template to edit.
 type Config struct {
-	Bind      string      `json:"bind"`       // interface to bind all listeners to
-	Ports     Ports       `json:"ports"`      // 0 disables a given listener
-	Save      string      `json:"save"`       // both | raw | meta
-	OutDir    string      `json:"out_dir"`    // capture output directory
-	MaxJobMB  int         `json:"max_job_mb"` // per-job byte cap (0 = unlimited)
-	TLS       TLSConf     `json:"tls"`
-	Raw       RawOpts     `json:"raw"`
-	LPD       LPDOpts     `json:"lpd"`
-	IPPOpts   IPPOpts     `json:"ipp_options"`
-	Printer   Printer     `json:"printer"`
-	SNMP      SNMPConf    `json:"snmp"`
-	Dashboard DashConf    `json:"dashboard"`
-	MDNS      MDNSConf    `json:"mdns"`
-	Log       LogConf     `json:"log"`
-	Forward   ForwardConf `json:"forward"`
-	EBCDIC    EBCDICConf  `json:"ebcdic"`
-	SMB       SMBConf     `json:"smb"`
-	WSD       WSDConf     `json:"wsd"`
-	Storage   StorageConf `json:"storage"`
-	DLP       DLPConf     `json:"dlp"`
-	Service   ServiceConf `json:"service"`
+	Bind          string      `json:"bind"`          // interface to bind all listeners to
+	Ports         Ports       `json:"ports"`         // 0 disables a given listener
+	Save          string      `json:"save"`          // both | raw | meta
+	OutDir        string      `json:"out_dir"`       // capture output directory
+	MaxJobMB      int         `json:"max_job_mb"`    // per-job byte cap (0 = unlimited)
+	Notifications bool        `json:"notifications"` // GUI: show a tray balloon after each capture
+	TLS           TLSConf     `json:"tls"`
+	Raw           RawOpts     `json:"raw"`
+	LPD           LPDOpts     `json:"lpd"`
+	IPPOpts       IPPOpts     `json:"ipp_options"`
+	Printer       Printer     `json:"printer"`
+	SNMP          SNMPConf    `json:"snmp"`
+	Dashboard     DashConf    `json:"dashboard"`
+	MDNS          MDNSConf    `json:"mdns"`
+	Log           LogConf     `json:"log"`
+	Forward       ForwardConf `json:"forward"`
+	EBCDIC        EBCDICConf  `json:"ebcdic"`
+	SMB           SMBConf     `json:"smb"`
+	WSD           WSDConf     `json:"wsd"`
+	Storage       StorageConf `json:"storage"`
+	DLP           DLPConf     `json:"dlp"`
+	Service       ServiceConf `json:"service"`
 }
 
 // ServiceConf configures the installed Windows service. Blank Account = the
@@ -307,9 +308,10 @@ func defaultConfig() *Config {
 			Dashboard: 8631,
 			SNMP:      161,
 		},
-		Save:     "both",
-		OutDir:   "captures",
-		MaxJobMB: 0,
+		Save:          "both",
+		OutDir:        "captures",
+		MaxJobMB:      0,
+		Notifications: true,
 		Raw: RawOpts{
 			ExtraPorts: []int{},
 			ParsePJL:   true,

@@ -82,6 +82,12 @@ var (
 	// Dashboard
 	uiDashEnabled *walk.CheckBox
 
+	// General — capture notifications (cfg.Notifications)
+	uiNotifications *walk.CheckBox
+
+	// Service — start the tray GUI at login (registry-backed, not a cfg field)
+	uiRunAtLogin *walk.CheckBox
+
 	// Printer (extended)
 	uiInfo, uiDocFormats, uiDefaultFormat *walk.LineEdit
 	uiSides, uiResolutions, uiMedia       *walk.LineEdit
@@ -150,7 +156,7 @@ func runGUI() {
 	// System tray icon + menu.
 	notifyIcon, _ = walk.NewNotifyIcon(mw)
 	if notifyIcon != nil {
-		if icon, err := walk.NewIconFromSysDLL("imageres", 109); err == nil {
+		if icon := loadAppIcon(); icon != nil {
 			notifyIcon.SetIcon(icon)
 			mw.SetIcon(icon)
 		}
@@ -166,6 +172,20 @@ func runGUI() {
 		addTrayAction("Open Capture Folder", openFolder)
 		notifyIcon.ContextMenu().Actions().Add(walk.NewSeparatorAction())
 		addTrayAction("Exit", func() { reallyExit = true; mw.Close() })
+
+		// Show a tray balloon after each capture (gated by cfg.Notifications via
+		// notifyCapture). Marshalled onto the GUI thread; guarded against a nil
+		// icon in case it was disposed.
+		onCapture = func(j *job) {
+			title := "printcap — job captured"
+			body := fmt.Sprintf("%s · %s · %d bytes",
+				j.Protocol, firstNonEmpty(j.JobName, j.Source), j.Bytes)
+			mw.Synchronize(func() {
+				if notifyIcon != nil {
+					_ = notifyIcon.ShowMessage(title, body)
+				}
+			})
+		}
 	}
 
 	// Minimize/close to tray instead of exiting.
@@ -189,6 +209,21 @@ func runGUI() {
 	if notifyIcon != nil {
 		notifyIcon.Dispose()
 	}
+}
+
+// loadAppIcon returns the application/tray icon. It first tries the icon
+// embedded in the exe by goversioninfo (resource ID 2 — the first icon group
+// goversioninfo writes when versioninfo.json sets IconPath). If no .ico was
+// embedded, it falls back to a generic printer glyph from imageres.dll so the
+// tray always has an icon. Returns nil only if both sources fail.
+func loadAppIcon() *walk.Icon {
+	if icon, err := walk.NewIconFromResourceId(2); err == nil && icon != nil {
+		return icon
+	}
+	if icon, err := walk.NewIconFromSysDLL("imageres", 109); err == nil {
+		return icon
+	}
+	return nil
 }
 
 func buildWindow() error {
@@ -268,6 +303,10 @@ func generalTab() dec.TabPage {
 
 			dec.Label{Text: ""},
 			dec.CheckBox{AssignTo: &uiDashEnabled, Text: "Enable web dashboard"},
+			dec.HSpacer{},
+
+			dec.Label{Text: ""},
+			dec.CheckBox{AssignTo: &uiNotifications, Text: "Show a tray notification after each captured job"},
 			dec.HSpacer{},
 		},
 	}
@@ -678,6 +717,10 @@ func serviceTab() dec.TabPage {
 							dec.HSpacer{},
 						},
 					},
+					dec.CheckBox{
+						AssignTo: &uiRunAtLogin,
+						Text:     "Start printcap automatically when I log in",
+					},
 				},
 			},
 			dec.GroupBox{
@@ -709,6 +752,8 @@ func refreshUIFromConfig() {
 	uiMaxJob.SetValue(float64(cfg.MaxJobMB))
 	uiBind.SetText(cfg.Bind)
 	uiDashEnabled.SetChecked(cfg.Dashboard.Enabled)
+	uiNotifications.SetChecked(cfg.Notifications)
+	uiRunAtLogin.SetChecked(runAtLogin()) // system state, not a cfg field
 
 	setRow(rowRaw, cfg.Ports.Raw9100)
 	setRow(rowLPR, cfg.Ports.LPR)
@@ -825,6 +870,13 @@ func applyUIToConfig() []string {
 	cfg.MaxJobMB = int(uiMaxJob.Value())
 	cfg.Bind = uiBind.Text()
 	cfg.Dashboard.Enabled = uiDashEnabled.Checked()
+	cfg.Notifications = uiNotifications.Checked()
+
+	// Start-on-login is a system-state toggle (registry), not a cfg field, so
+	// apply it directly here. A failure is non-fatal: record it as a soft error.
+	if err := setRunAtLogin(uiRunAtLogin.Checked()); err != nil {
+		jsonErrs = append(jsonErrs, fmt.Sprintf("start-at-login: %v", err))
+	}
 
 	cfg.Ports.Raw9100 = rowPort(rowRaw)
 	cfg.Ports.LPR = rowPort(rowLPR)
@@ -1205,11 +1257,12 @@ func onGenerateCert() {
 }
 
 func onFirewallAdd() {
-	if err := addFirewallRules(); err != nil {
+	n, err := addFirewallRules()
+	if err != nil {
 		walk.MsgBox(mw, "Firewall", "Failed (run printcap as Administrator?):\n\n"+err.Error(), walk.MsgBoxIconError)
 		return
 	}
-	walk.MsgBox(mw, "Firewall", "Inbound allow rules added for printcap.", walk.MsgBoxIconInformation)
+	walk.MsgBox(mw, "Firewall", fmt.Sprintf("Added %d inbound port rule(s) for printcap.", n), walk.MsgBoxIconInformation)
 }
 
 func onFirewallRemove() {

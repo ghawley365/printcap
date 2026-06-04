@@ -145,6 +145,7 @@ func (s *captureSink) save(j *job) error {
 	}
 
 	store.add(j)
+	notifyCapture(j) // fire the front-end capture hook (GUI tray balloon), if any
 	logInfo(j.Protocol, "captured %d bytes from %s user=%s job=%q queue=%s pdl=%s -> %s",
 		j.Bytes, j.Source, orQ(j.User), j.JobName, orQ(j.Queue), orQ(j.PDL), orElse(j.SavedAs, "(meta only)"))
 	return fwdErr
