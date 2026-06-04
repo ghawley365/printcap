@@ -51,6 +51,24 @@ func (c idleConn) Read(p []byte) (int, error) {
 	return c.Conn.Read(p)
 }
 
+// appendCapped appends src to dst but never lets dst grow past cap bytes
+// (cap <= 0 means unlimited). The SMB capture path receives data as discrete
+// WRITE/WritePrinter PDUs rather than one bounded stream, so io.LimitReader
+// doesn't apply; this bounds the retained spool buffer the same way jobByteCap
+// bounds the streaming listeners, keeping a hostile client from exhausting RAM.
+func appendCapped(dst, src []byte, cap int64) []byte {
+	if cap > 0 {
+		room := cap - int64(len(dst))
+		if room <= 0 {
+			return dst
+		}
+		if int64(len(src)) > room {
+			src = src[:room]
+		}
+	}
+	return append(dst, src...)
+}
+
 // readStream reads r to EOF, bounded by cap bytes when cap > 0.
 func readStream(r io.Reader, cap int64) []byte {
 	if cap > 0 {

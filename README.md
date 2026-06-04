@@ -307,6 +307,40 @@ Built-in code pages: **CP037** (US/Canada), **CP500** (International), **CP1047*
 The richer LPD control file also captures Class (`C`) and Title (`T`); a FORTRAN
 carriage-control (`r`) data line hints ASA.
 
+## SMB print share (experimental)
+
+printcap can receive print jobs delivered over **SMB2/3** to a printer share —
+the way Windows shops normally "add a printer" by browsing the network. It models
+SMB2/3 + NTLMv2 + the `\spoolss` named pipe (DCERPC/MS-RPRN) and captures the
+spooled job (user, document name, and bytes) like every other transport, then
+runs it through PDL detection and forwarding.
+
+It is **off by default and experimental**, and runs on a configurable **non-445
+port** (default `4445`) so it never collides with the OS's own SMB stack. Enable
+it with `-smb` or the `smb` config block: `port`, `share_name`, `require_auth`
+(allow guest if false), `sign`, `encrypt`, and a `users` list (`user`/`password`/
+`domain`) for NTLMv2. Passwords are redacted from the dashboard's `/api/config`.
+
+Negotiation prefers SMB **3.1.1** (preauth integrity + AES-128-GCM); signing uses
+AES-CMAC. The implementation is pure-stdlib (NTLMv2/MD4, AES-CMAC, and the SMB2/
+DCERPC/spoolss wire formats are all hand-rolled — no third-party SMB library).
+
+Verify from a Linux/macOS client with Samba's `smbclient`:
+
+    smbclient //HOST/PRINTER -p 4445 -N                 # guest
+    smbclient //HOST/PRINTER -p 4445 -U user%pass        # NTLMv2
+    # then at the smb> prompt:  print somefile.pcl
+
+Verified end-to-end against Samba `smbclient` 4.x: guest, NTLMv2-authenticated,
+and AES-CMAC-**signed** print all capture correctly.
+
+Limitations: experimental; AES-128-GCM only (CCM not implemented); SMB3 response
+encryption mirrors the client (engaged when the client encrypts at the SMB3
+layer) — clients that force NTLM-level SEAL/key-exchange (e.g. `smbclient
+--client-protection=encrypt`) are not supported, so use **signing** for
+integrity. The share is a capture sink, not a real Windows spooler (no job
+status/management RPCs).
+
 ## How clients reach it
 
 * **Raw/9100** — add a "Standard TCP/IP Port" printer pointing at the host, "Raw", port 9100.

@@ -160,6 +160,10 @@ func (e *Engine) Start() (int, error) {
 		}
 	}
 
+	if cfg.SMB.Enabled {
+		addTCP("SMB", cfg.SMB.Port, serveSMB)
+	}
+
 	if cfg.MDNS.Enabled {
 		host := resolveHost()
 		v4, v6 := localAddrs(cfg.Bind)
