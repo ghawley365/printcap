@@ -627,10 +627,33 @@ func onBrowse() {
 	}
 }
 
-func onSave() {
+// applyAndPersist applies the UI to the live config and writes it to disk,
+// bouncing the engine if it is running so cfg is never mutated under live
+// handlers. If restart is requested (or the engine was running), the engine is
+// (re)started afterward.
+func applyAndPersist(restart bool) error {
+	wasRunning := engineRunning()
+	if wasRunning {
+		if err := engineStop(); err != nil { // synchronous: drains all handlers
+			return err
+		}
+	}
 	applyUIToConfig()
 	if err := dumpConfig(configFilePath); err != nil {
+		return err
+	}
+	if restart || wasRunning {
+		if err := engineStart(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func onSave() {
+	if err := applyAndPersist(false); err != nil {
 		walk.MsgBox(mw, "Save failed", err.Error(), walk.MsgBoxIconError)
+		updateStatus()
 		return
 	}
 	walk.MsgBox(mw, "Saved", "Configuration saved to:\n"+configFilePath, walk.MsgBoxIconInformation)
@@ -638,17 +661,8 @@ func onSave() {
 }
 
 func onSaveRestart() {
-	applyUIToConfig()
-	if err := dumpConfig(configFilePath); err != nil {
+	if err := applyAndPersist(true); err != nil {
 		walk.MsgBox(mw, "Save failed", err.Error(), walk.MsgBoxIconError)
-		return
-	}
-	if err := engineStop(); err != nil {
-		walk.MsgBox(mw, "Stop failed", err.Error(), walk.MsgBoxIconError)
-	}
-	time.Sleep(300 * time.Millisecond)
-	if err := engineStart(); err != nil {
-		walk.MsgBox(mw, "Start failed", err.Error(), walk.MsgBoxIconError)
 	}
 	updateStatus()
 }

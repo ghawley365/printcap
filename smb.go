@@ -13,7 +13,7 @@ func serveSMB(ln net.Listener) {
 		if err != nil {
 			return
 		}
-		go handleSMBConn(c)
+		trackGo(func() { handleSMBConn(c) })
 	}
 }
 

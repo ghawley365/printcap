@@ -259,7 +259,8 @@ func startWSDDiscovery() *wsdDiscoveryResponder {
 
 	// Build conns fully before launching goroutines (race-free, like mdns).
 	for _, c := range r.conns {
-		go r.serve(c)
+		c := c
+		trackGo(func() { r.serve(c) })
 	}
 	hello := helloMessage()
 	for _, c := range r.conns {

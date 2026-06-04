@@ -21,7 +21,7 @@ func serveLPD(ln net.Listener) {
 		if err != nil {
 			return
 		}
-		go handleLPD(conn)
+		trackGo(func() { handleLPD(conn) })
 	}
 }
 

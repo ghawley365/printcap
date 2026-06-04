@@ -15,7 +15,7 @@ func serveRaw9100(ln net.Listener) {
 		if err != nil {
 			return
 		}
-		go handleRaw9100(conn)
+		trackGo(func() { handleRaw9100(conn) })
 	}
 }
 

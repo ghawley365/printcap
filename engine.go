@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -8,7 +9,34 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"time"
 )
+
+// handlerWG tracks every goroutine the engine spawns (accept loops, per-
+// connection handlers, UDP/responder loops) so Stop() can wait for them all to
+// finish before returning — making restart race-free.
+var handlerWG sync.WaitGroup
+
+// trackGo runs f in a tracked goroutine. Stop() blocks until every tracked
+// goroutine has returned.
+func trackGo(f func()) {
+	handlerWG.Add(1)
+	go func() {
+		defer handlerWG.Done()
+		f()
+	}()
+}
+
+// httpCloser shuts an http.Server gracefully (drain in-flight handlers up to a
+// timeout) then force-closes, so Stop() leaves no handler goroutine running.
+type httpCloser struct{ srv *http.Server }
+
+func (h httpCloser) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = h.srv.Shutdown(ctx)
+	return h.srv.Close()
+}
 
 // Engine owns every listener and lets callers Start and Stop the whole capture
 // service in-process. The console front-end, the Windows service, and the GUI
@@ -83,7 +111,7 @@ func (e *Engine) Start() (int, error) {
 		e.closers = append(e.closers, ln)
 		e.active = append(e.active, name+":"+itoa(port))
 		logInfo("engine", "listening %s on %s", name, bindAddr(port))
-		go serve(ln)
+		trackGo(func() { serve(ln) })
 		return true
 	}
 
@@ -100,10 +128,10 @@ func (e *Engine) Start() (int, error) {
 		if tlsCfg != nil {
 			ln = tls.NewListener(ln, tlsCfg)
 		}
-		e.closers = append(e.closers, srv)
+		e.closers = append(e.closers, httpCloser{srv})
 		e.active = append(e.active, name+":"+itoa(port))
 		logInfo("engine", "listening %s on %s%s", name, bindAddr(port), tlsLabel(tlsCfg))
-		go srv.Serve(ln)
+		trackGo(func() { srv.Serve(ln) })
 		return true
 	}
 
@@ -116,7 +144,7 @@ func (e *Engine) Start() (int, error) {
 		} else {
 			e.closers = append(e.closers, ln)
 			e.active = append(e.active, "IPP/IPPS:"+itoa(ports.AutoTLS))
-			go serveAutoTLS(ln, tlsCfg)
+			trackGo(func() { serveAutoTLS(ln, tlsCfg) })
 			bl.IPP, bl.IPPS = ports.AutoTLS, ports.AutoTLS
 		}
 	}
@@ -150,7 +178,7 @@ func (e *Engine) Start() (int, error) {
 			buildMIB()
 			e.closers = append(e.closers, pc)
 			e.active = append(e.active, "SNMP:"+itoa(ports.SNMP))
-			go serveSNMP(pc)
+			trackGo(func() { serveSNMP(pc) })
 		}
 	}
 
@@ -204,20 +232,27 @@ func join(xs []string, sep string) string {
 	return out
 }
 
-// Stop closes every listener; the accept-loop goroutines then unwind on their
-// own as Accept/ReadFrom return errors.
+// Stop closes every listener and then waits for every tracked goroutine (accept
+// loops, per-connection handlers, UDP/responder loops, HTTP handlers) to finish
+// before returning, so a restart is race-free: once Stop() returns, nothing
+// reads cfg/sink/store/forward.
 func (e *Engine) Stop() {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	if !e.running {
+		e.mu.Unlock()
 		return
 	}
 	for _, c := range e.closers {
-		_ = c.Close()
+		_ = c.Close() // stops accept loops; Shutdown drains HTTP handlers
 	}
 	e.closers = nil
 	e.active = nil
 	e.running = false
+	e.mu.Unlock()
+	// Wait OUTSIDE the lock for every tracked goroutine to finish, so that when
+	// Stop() returns nothing reads cfg/sink/store/forward. In-flight per-conn
+	// handlers unwind via their idle read deadlines (limits.go idleReadTimeout).
+	handlerWG.Wait()
 	logInfo("engine", "stopped (all listeners closed)")
 }
 
