@@ -77,6 +77,7 @@ func main() {
 	configPath := flag.String("config", "", "path to a JSON config file to load (default: printcap.json next to the exe)")
 	dumpPath := flag.String("dump-config", "", "write effective config to this path ('-' for stdout) and exit")
 	checkConfig := flag.Bool("check", false, "validate the effective config, print issues + recommended fixes, and exit")
+	showVersion := flag.Bool("version", false, "print the printcap version and exit")
 	svcCmd := flag.String("service", "", "Windows service control: install | remove | start | stop | status")
 	fwCmd := flag.String("firewall", "", "Windows firewall: add | remove inbound allow rules for this exe")
 	console := flag.Bool("console", false, "run headless in the console instead of launching the GUI")
@@ -103,6 +104,12 @@ func main() {
 	flag.Bool("smb", false, "enable the experimental SMB print share")
 	flag.Bool("wsd", false, "enable the experimental WSD print service")
 	flag.Parse()
+
+	// -version: print the build version and exit before any heavy init.
+	if *showVersion {
+		fmt.Println(versionString())
+		return
+	}
 
 	// Resolve the config file path (explicit flag, else next to the exe).
 	configFilePath = *configPath
@@ -161,7 +168,7 @@ func main() {
 	configureLogging()
 	log.SetFlags(0)
 	log.SetOutput(stdLogWriter{})
-	logInfo("app", "printcap starting (config %q, level %s)", configFilePath, logger.Level())
+	logInfo("app", "%s starting (config %q, level %s)", versionString(), configFilePath, logger.Level())
 
 	// Surface config problems up-front so operators see *why* a listener may be
 	// missing. Non-fatal: the engine already skips listeners that fail to bind.
@@ -201,6 +208,7 @@ func runConsole() {
 func printBanner(n int) {
 	abs := captureDir()
 	fmt.Println("printcap — network print server & spool capture")
+	fmt.Printf("  %s\n", versionString())
 	fmt.Printf("  printer    : %q (%s)\n", cfg.Printer.Name, cfg.Printer.MakeAndModel)
 	fmt.Printf("  output dir : %s  (mode=%s)\n", abs, cfg.Save)
 	for _, a := range engine.Active() {

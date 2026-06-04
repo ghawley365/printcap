@@ -49,6 +49,14 @@ type Config struct {
 	WSD       WSDConf     `json:"wsd"`
 	Storage   StorageConf `json:"storage"`
 	DLP       DLPConf     `json:"dlp"`
+	Service   ServiceConf `json:"service"`
+}
+
+// ServiceConf configures the installed Windows service. Blank Account = the
+// default LocalSystem account.
+type ServiceConf struct {
+	Account  string `json:"account"`  // e.g. ".\\svc_printcap" or "DOMAIN\\user"; blank = LocalSystem
+	Password string `json:"password"` // password for Account (if required)
 }
 
 // DLPConf scans captured documents for sensitive content and raises an alert
@@ -380,6 +388,7 @@ func defaultConfig() *Config {
 			Discovery: true,
 		},
 		Storage: StorageConf{SpoolDir: ""}, // empty = <exe-dir>/spool
+		Service: ServiceConf{},
 		DLP: DLPConf{
 			Enabled: false,
 			Rules:   []DLPRule{},

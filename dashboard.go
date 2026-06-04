@@ -31,7 +31,13 @@ func dashboardHandler() http.Handler {
 	mux.HandleFunc("/api/events", apiEvents)
 	mux.HandleFunc("/api/logs", apiLogs)
 	mux.HandleFunc("/api/logfile", apiLogFile)
+	mux.HandleFunc("/api/version", apiVersion)
 	return mux
+}
+
+// apiVersion reports the printcap build version.
+func apiVersion(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, map[string]string{"version": version})
 }
 
 // apiLogFile streams the active log file as a download.
@@ -488,6 +494,9 @@ func redactedConfig() *Config {
 	}
 	c.TLS.CertFile = ""
 	c.TLS.KeyFile = ""
+	if c.Service.Password != "" {
+		c.Service.Password = "***"
+	}
 	return &c
 }
 

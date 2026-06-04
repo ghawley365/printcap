@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
@@ -76,16 +77,33 @@ func installService() error {
 	if configFilePath != "" {
 		args = append(args, "-config", configFilePath)
 	}
-	s, err := m.CreateService(serviceName, exe, mgr.Config{
-		DisplayName:  serviceDisplay,
-		Description:  serviceDesc,
-		StartType:    mgr.StartAutomatic,
-		ErrorControl: mgr.ErrorNormal,
-	}, args...)
+	scmCfg := mgr.Config{
+		DisplayName:      serviceDisplay,
+		Description:      serviceDesc,
+		StartType:        mgr.StartAutomatic,
+		ErrorControl:     mgr.ErrorNormal,
+		DelayedAutoStart: true, // start after the network stack is up
+	}
+	// Run as a dedicated account if configured; blank = LocalSystem.
+	if cfg.Service.Account != "" {
+		scmCfg.ServiceStartName = cfg.Service.Account
+		scmCfg.Password = cfg.Service.Password
+	}
+	s, err := m.CreateService(serviceName, exe, scmCfg, args...)
 	if err != nil {
 		return err
 	}
 	defer s.Close()
+
+	// Ask the SCM to auto-restart the service if it crashes.
+	if err := s.SetRecoveryActions([]mgr.RecoveryAction{
+		{Type: mgr.ServiceRestart, Delay: 5 * time.Second},
+		{Type: mgr.ServiceRestart, Delay: 15 * time.Second},
+		{Type: mgr.ServiceRestart, Delay: 60 * time.Second},
+	}, 86400 /* reset failure count after 1 day, in seconds */); err != nil {
+		logWarn("svc", "could not set service recovery actions: %v", err)
+	}
+
 	installEventLogSource() // register the Event Log source for service logging
 	return nil
 }
