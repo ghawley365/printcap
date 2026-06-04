@@ -285,8 +285,11 @@ func handleSessionSetupLeg1(s *smbSession, reqHdr smb2Header, reqMsg []byte) ([]
 	domainOrWorkgroup := smbDomainHint()
 	targetInfo := ntlmTargetInfo(domainOrWorkgroup, serverComputerName)
 	chalMsg := buildChallenge(challenge, targetInfo)
+	// smbclient/Windows require the CHALLENGE token wrapped in SPNEGO
+	// (NegTokenResp, accept-incomplete); a raw NTLMSSP token is rejected.
+	secToken := spnegoWrapResponse(spnegoAcceptIncomplete, chalMsg)
 
-	resp := buildSessionSetupResponse(reqHdr, s.sessionID, statusMoreProcessingRequired, 0, chalMsg)
+	resp := buildSessionSetupResponse(reqHdr, s.sessionID, statusMoreProcessingRequired, 0, secToken)
 
 	// Fold leg-1 request then leg-1 response into the preauth hash, in order.
 	updatePreauth(s, reqMsg)
@@ -337,7 +340,9 @@ func handleSessionSetupLeg2(s *smbSession, reqHdr smb2Header, reqMsg, ntlmMsg []
 	s.signingRequired = cfg.SMB.Sign
 	s.encryptData = cfg.SMB.Encrypt
 
-	resp := buildSessionSetupResponse(reqHdr, s.sessionID, statusSuccess, 0, nil)
+	// Signal SPNEGO completion (NegTokenResp, accept-completed) on success.
+	successToken := spnegoWrapResponse(spnegoAcceptCompleted, nil)
+	resp := buildSessionSetupResponse(reqHdr, s.sessionID, statusSuccess, 0, successToken)
 	return resp, statusSuccess, true
 }
 
@@ -351,7 +356,9 @@ func finishGuestSession(s *smbSession, reqHdr smb2Header) ([]byte, uint32, bool)
 	s.authComplete = true
 	// Guest sessions are never signing-required ([MS-SMB2] §3.3.5.5.3).
 	s.signingRequired = false
-	resp := buildSessionSetupResponse(reqHdr, s.sessionID, statusSuccess, smb2SessionFlagIsGuest, nil)
+	// Signal SPNEGO completion (NegTokenResp, accept-completed) on success.
+	successToken := spnegoWrapResponse(spnegoAcceptCompleted, nil)
+	resp := buildSessionSetupResponse(reqHdr, s.sessionID, statusSuccess, smb2SessionFlagIsGuest, successToken)
 	return resp, statusSuccess, true
 }
 
