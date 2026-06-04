@@ -12,6 +12,10 @@
   "save": "both",
   "out_dir": "captures",
   "max_job_mb": 0,
+  "notifications": true,
+  "storage": {
+    "spool_dir": ""
+  },
   "tls": {
     "cert_file": "",
     "key_file": ""
@@ -87,6 +91,17 @@
   },
   "dashboard": {
     "enabled": true
+  },
+  "dlp": {
+    "enabled": false,
+    "rules": [
+      { "name": "US SSN", "mode": "regex", "pattern": "\\b\\d{3}-\\d{2}-\\d{4}\\b" },
+      { "name": "Confidential marking", "mode": "keyword", "pattern": "CONFIDENTIAL" }
+    ]
+  },
+  "service": {
+    "account": "",
+    "password": ""
   },
   "log": {
     "level": "info",

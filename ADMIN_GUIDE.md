@@ -19,7 +19,7 @@ Windows.
 9. [Protocols in detail](#9-protocols-in-detail)
 10. [Connecting print clients](#10-connecting-print-clients)
 11. [SNMP discovery](#11-snmp-discovery)
-12. [The web dashboard & JSON API](#12-the-web-dashboard--json-api)
+12. [The web dashboard & admin console](#12-the-web-dashboard--admin-console)
 13. [Captured output on disk](#13-captured-output-on-disk)
 14. [Security & hardening](#14-security--hardening)
 15. [Running as a Windows service](#15-running-as-a-windows-service)
@@ -47,8 +47,8 @@ metadata (who, when, from where, in what format).
 | LPR / LPD | TCP 515 | RFC 1179 |
 | IPP | TCP 631 | IPP-over-HTTP |
 | IPPS | TCP 6310 | IPP-over-HTTPS (TLS) |
-| SNMP agent | UDP 161 | SNMP v1/v2c |
-| Web dashboard | TCP 8631 | HTTP |
+| SNMP agent | UDP 161 | SNMP v1/v2c (+ optional v3/USM) |
+| Web dashboard | TCP 8631 | HTTP (admin console) |
 
 **Intended use:** print-infrastructure testing, driver/queue validation, and
 authorized print-security assessment on networks you control. It receives jobs
@@ -75,12 +75,20 @@ intercept traffic destined for other devices.
 
 ## 3. Installation & deployment
 
-printcap is xcopy-deployable.
+printcap ships as a single self-contained `.exe`. Deploy it either by plain
+xcopy or with the bundled Windows installer.
+
+### Option A — xcopy (portable)
 
 1. Copy `printcap.exe` to a folder, e.g. `C:\printcap\`.
 2. (Optional) Copy a config file alongside it, e.g. `C:\printcap\printcap.json`.
 3. Decide where captures go (the `out_dir` / `-out` location). The folder is
    created automatically on first run.
+
+printcap is **fully portable**: every generated file (captures, the
+spool/retry queue, logs) resolves **relative to the executable's directory**
+unless you give an absolute path, so the same folder runs unchanged from a
+network share or USB stick (see §6).
 
 Suggested layout:
 
@@ -89,6 +97,32 @@ C:\printcap\
   printcap.exe
   printcap.json        (your edited config)
   captures\            (created automatically)
+  spool\               (forward-retry queue + temp; created automatically)
+  printcap.log         (created automatically)
+```
+
+### Option B — Windows installer (Inno Setup)
+
+A signed/installable build is produced from `installer/printcap.iss` (Inno
+Setup 6+; `iscc printcap.iss`). The installer:
+
+* installs `printcap.exe` (plus `printcap.sample.json`, `README.md`, and this
+  guide) into **Program Files** (`%ProgramFiles%\printcap`);
+* offers two optional tasks under *Windows integration*:
+  * **Install and start the Windows service** (runs unattended at boot);
+  * **Add Windows Firewall rules for the configured listener ports** (one
+    inbound rule **per configured port** — see §5);
+* requires Administrator (it manages a service, the Event Log, and firewall
+  rules);
+* uninstalls cleanly — it stops and removes the service (which also
+  deregisters the Event Log source) and deletes the firewall rules, but
+  **deliberately keeps your captured data, the spool/retry queue, and
+  `printcap.json`** (see §20).
+
+Check the installed build at any time with:
+
+```
+printcap.exe -version
 ```
 
 ### Building from source (optional)
@@ -118,7 +152,7 @@ The same `printcap.exe` runs three ways:
 
 | How you launch it | What happens |
 |-------------------|--------------|
-| Double-click (or run with no args) | Opens the **settings GUI** (minimizes to tray) |
+| Double-click (or run with no args) | Opens the **settings GUI** (tray icon while open; closing the window quits) |
 | `printcap.exe -console` | Runs **headless** in the console |
 | `printcap.exe -service …` / launched by the SCM | Runs as / manages the **Windows service** |
 
@@ -130,12 +164,22 @@ The same `printcap.exe` runs three ways:
 
 Double-click **printcap.exe**. The settings window opens. On the **Protocols &
 Ports** tab, enable the protocols you want; on **General**, set the capture
-directory and save mode. Click **Start**. Closing the window minimizes it to the
-system tray (right-click the tray icon for Open / Dashboard / Capture folder /
-Exit).
+directory and save mode. Click **Start**. A system-tray icon is available while
+the window is open (right-click for Open / Dashboard / Capture folder / Exit).
+
+> **Closing the GUI window quits printcap** — it stops the engine, releases the
+> ports, and exits the process. For background capture that survives logout and
+> window close, install the **Windows service** (§15) or run `-console`.
 
 To bind ports below 1024 (515/631/161) or install the service, right-click
-printcap.exe → **Run as administrator**.
+printcap.exe → **Run as administrator** (or accept the UAC prompt the service
+and firewall actions raise — §5).
+
+The GUI configures **100% of the configuration**: every printer field, the
+Discovery/SMB/EBCDIC/Forward/DLP tabs, SNMPv3/USM users, storage folders,
+notifications, and so on. Nested blocks (forward targets, transforms) are
+edited as JSON, and **Save** runs the same validation as `-check` and shows any
+issues before writing the file.
 
 ### Console
 
@@ -173,18 +217,26 @@ appears within ~2 seconds. Stop with **Ctrl+C**.
   prompt on Windows. If you run un-elevated, those listeners fail to bind and
   log `listener stopped: ... bind: ... permission denied`; the others keep
   running. High ports (9100, 6310, 8631) need no elevation.
+* **UAC self-elevation.** Running an admin-requiring command —
+  `-service install|remove|start|stop` or `-firewall add|remove` — from a
+  **non-elevated** prompt triggers a UAC consent prompt and re-launches that
+  command elevated automatically. (`-service status` is read-only and does not
+  elevate.) You no longer have to remember to open an Administrator prompt
+  first.
 * **Windows Firewall** — printcap can add its own inbound allow rules. Use the
-  GUI's **Service & Firewall** tab → *Allow through Firewall*, or the CLI
-  (Administrator):
+  GUI's **Service & Firewall** tab → *Allow through Firewall*, or the CLI:
 
   ```
-  printcap.exe -firewall add        :: program-scoped TCP + UDP inbound allow
+  printcap.exe -firewall add        :: per-port inbound allow rules for this exe
   printcap.exe -firewall remove
   ```
 
-  These are **program-scoped** (they allow the printcap exe inbound on any port),
-  so they keep working if you reconfigure ports. To scope by port instead, add
-  rules manually (Administrator PowerShell):
+  Rules are now **per-port AND program-scoped**: printcap adds **one inbound
+  allow rule per configured listener port** (named e.g. `printcap TCP 9100`,
+  `printcap UDP 161`), each scoped to the printcap executable. `add` reads the
+  ports from the live config, so re-run it after changing ports; `remove`
+  deletes every printcap rule for the currently-configured ports. To scope by
+  port manually instead, use Administrator PowerShell:
 
   ```powershell
   New-NetFirewallRule -DisplayName "printcap TCP" -Direction Inbound -Protocol TCP `
@@ -230,6 +282,59 @@ Typical production invocation:
 printcap.exe -config C:\printcap\printcap.json
 ```
 
+### Files, folders, and portability
+
+printcap writes **all** generated files to configurable, executable-relative
+folders, so the whole deployment is portable and nothing is ever auto-deleted
+at shutdown:
+
+| Content | Setting | Default |
+|---------|---------|---------|
+| Captured spool files + `.json`/decoded sidecars | `out_dir` (`-out`) | `<exe-dir>\captures` |
+| Forward-retry queue (durable) + temp working files | `storage.spool_dir` | `<exe-dir>\spool` |
+| Log file (rotating) | `log.file` (`-logfile`) | `<exe-dir>\printcap.log` |
+
+**Relative paths resolve relative to the executable's directory**, not the
+current working directory — important under the service, whose working
+directory is `C:\Windows\System32`. Absolute paths are used verbatim. The
+folders are created on first use; **nothing is auto-deleted** — manage
+retention of captures, the `spool\forward-retry\dead\` dead-letter folder, and
+old logs yourself (see §13, §16).
+
+### Validating the config (`-check`)
+
+Before starting listeners, dry-run the effective config:
+
+```
+printcap.exe -check
+printcap.exe -config C:\printcap\printcap.json -check
+```
+
+`-check` validates the **effective** config (defaults + `-config` + flags),
+prints every issue with a recommended fix, prints an
+`N error(s), M warning(s)` summary, and **exits non-zero if there are any
+errors** (so it slots into CI / a pre-deploy gate). It checks:
+
+* **ports** — range (0–65535), privileged (<1024) warnings, and duplicate /
+  conflicting listener ports (accounting for the `auto_tls` IPP+IPPS merge);
+* **enums** — `save`, `log.level`, `log.format`, `log.syslog.network`,
+  `ebcdic.carriage_control` / `default_code_page`, `lpd.queue_defaults[*]`,
+  `forward.capture`, and each `forward.targets[*].transport` / `.failure`;
+* **TLS** — that `cert_file`/`key_file` are set as a pair and the files exist;
+* **storage** — that `out_dir` and `storage.spool_dir` can be created and
+  written;
+* **syslog** — that `address` is `host:port` and `facility` is 0–23 when
+  enabled;
+* **forward targets** — non-blank address and plausible `host:port` (raw/lpr)
+  or URI (ipp/ipps);
+* **DLP rules** — known `mode` (keyword|regex), non-blank pattern, and that
+  regex patterns compile;
+* **bind** — that a non-wildcard `bind` address is a valid IP or resolves.
+
+The same validation runs **at startup** and logs each finding as a `[config]`
+warning or error (non-fatal — the engine still starts and simply skips any
+listener that can't bind). See §18 for using `-check` in troubleshooting.
+
 ---
 
 ## 7. Command-line flag reference
@@ -238,7 +343,10 @@ printcap.exe -config C:\printcap\printcap.json
 |------|------|--------|
 | `-config <path>` | string | Load a JSON config file (overlaid on defaults). Default: `printcap.json` next to the exe. |
 | `-console` | bool | Run headless in the console instead of launching the GUI. |
-| `-service <cmd>` | string | Windows service control: `install` \| `remove` \| `start` \| `stop` \| `status`. |
+| `-version` | bool | Print the printcap version (`printcap <ver>`) and exit. |
+| `-check` | bool | Validate the effective config, print every issue + recommended fix, and exit **non-zero on errors** (see §6). |
+| `-service <cmd>` | string | Windows service control: `install` \| `remove` \| `start` \| `stop` \| `status`. Self-elevates via UAC if not already elevated (except `status`). |
+| `-firewall <cmd>` | string | Windows Firewall: `add` \| `remove` per-port inbound allow rules for this exe (§5). Self-elevates via UAC. |
 | `-dump-config <path>` | string | Write effective config to `<path>` (or `-` for stdout) and exit. |
 | `-bind <addr>` | string | Interface address all listeners bind to. Default `0.0.0.0` (all). Use `127.0.0.1` for local-only. |
 | `-raw <port>` | int | Raw/JetDirect TCP port. `0` disables. Default 9100. |
@@ -297,8 +405,13 @@ field to keep its default.
     "snmp": 161
   },
   "save": "both",              // both | raw | meta
-  "out_dir": "captures",
+  "out_dir": "captures",       // capture dir; relative = next to the exe
   "max_job_mb": 0,             // per-job byte cap; 0 = unlimited
+  "notifications": true,       // GUI: show a tray balloon after each capture
+
+  "storage": {
+    "spool_dir": ""            // forward-retry queue + temp; blank = <exe-dir>/spool
+  },
 
   "tls": {
     "cert_file": "",           // PEM cert for IPPS; blank = self-signed
@@ -384,6 +497,19 @@ field to keep its default.
 
   "dashboard": {
     "enabled": true
+  },
+
+  "dlp": {                     // content inspection (alert-only; never blocks)
+    "enabled": false,
+    "rules": [                 // mode: keyword (substring) | regex (RE2)
+      { "name": "US SSN", "mode": "regex", "pattern": "\\b\\d{3}-\\d{2}-\\d{4}\\b" },
+      { "name": "Confidential marking", "mode": "keyword", "pattern": "CONFIDENTIAL" }
+    ]
+  },
+
+  "service": {                 // Windows run-as service account (blank = LocalSystem)
+    "account": "",             // e.g. ".\\svc_printcap" or "DOMAIN\\user"
+    "password": ""             // redacted in /api/config
   },
 
   "mdns": {
@@ -483,6 +609,25 @@ field to keep its default.
 * **`max_job_mb`** — caps each job at read time (bounded memory, not just
   truncated output). `0` = unlimited. Set a value when untrusted hosts can reach
   the tool.
+* **`out_dir` / `storage.spool_dir` / `log.file`** — the three output
+  locations. **Relative paths resolve relative to the executable** (portable);
+  absolute paths are used as-is. `out_dir` holds captures; `storage.spool_dir`
+  (blank = `<exe-dir>/spool`) holds the durable forward-retry queue and temp
+  working files; `log.file` (blank = `<exe-dir>/printcap.log`) is the rotating
+  log. None of these are auto-deleted — see §6 and §13.
+* **`notifications`** — when `true` (default), the GUI shows a brief tray
+  balloon after each capture. Set `false` to suppress the pop-ups (the console
+  and service are unaffected).
+* **`service.account` / `service.password`** — the Windows account the
+  **installed service** runs as. Blank `account` = **LocalSystem** (the
+  default; can bind privileged ports). Set `account` to `.\svc_printcap` or
+  `DOMAIN\user` (with `password` if required) to run least-privilege; that
+  account then needs write access to the capture/spool folders and the right
+  to bind any privileged ports you use. `password` is stored in clear text in
+  the config but **redacted in `/api/config`** — protect the file with ACLs
+  (§14). These take effect at `-service install` time (§15).
+* **`dlp`** — content inspection of captured documents (alert-only, never
+  blocks). See §14.6.
 * **`printer.document_formats`** — drives the IPP `document-format-supported`
   list. With `enforce_formats: true`, IPP jobs whose `document-format` isn't in
   the list are rejected with `client-error-document-format-not-supported` and
@@ -510,9 +655,12 @@ field to keep its default.
   > `authPriv` (authenticated **and** encrypted); `authNoPriv` leaves payloads
   > readable and `noAuthNoPriv` offers no protection at all. A requested security
   > level cannot exceed the user's configured `level` (asking for `authPriv`
-  > against an `authNoPriv` user is refused). The agent remains **read-only** —
-  > there is no SET support over any version. Note that v1/v2c community strings
-  > are still sent in clear text unless you set `allow_v1v2c: false`.
+  > against an `authNoPriv` user is refused). The v3 agent **validates the USM
+  > privacy parameters and rejects malformed encrypted packets** (e.g. a bad
+  > privacy-parameter length) rather than crashing. The agent remains
+  > **read-only** — there is no SET support over any version. Note that v1/v2c
+  > community strings are still sent in clear text unless you set
+  > `allow_v1v2c: false`.
 * **`tls.cert_file` / `key_file`** — supply a real certificate for IPPS if
   clients validate it. Left blank, printcap mints a fresh in-memory self-signed
   certificate at startup (clients must skip validation).
@@ -558,9 +706,13 @@ field to keep its default.
   * **`failure`** — what happens when a target can't be reached:
     * `best_effort` — always deliver if possible but **never block the sender**;
       delivery failures are only logged.
-    * `spool_retry` — retry in memory with `retry.backoff_ms` up to
-      `retry.max_attempts` or `retry.ttl_min`; retries are **not persisted**
-      across a restart.
+    * `spool_retry` — **durable** retry: the queued copy is persisted to
+      `<spool_dir>/forward-retry` and retried with `retry.backoff_ms` up to
+      `retry.max_attempts` or `retry.ttl_min`. Persisted items **survive a
+      restart** — printcap **replays** them on the next start. A give-up (max
+      attempts or TTL expired) is **dead-lettered** into the
+      `<spool_dir>/forward-retry/dead/` sub-folder and **kept** for the
+      operator (never auto-deleted).
     * `block` — propagate the failure back to the inbound client (the print
       fails upstream).
   * **`capture`** — what lands on disk: `both` (default), `sent` (transformed
@@ -711,30 +863,74 @@ See [Appendix A](#appendix-a--snmp-oid-map) for the full OID map.
 
 ---
 
-## 12. The web dashboard & JSON API
+## 12. The web dashboard & admin console
 
-Browse to `http://HOST:8631/`. The page auto-refreshes every 2 seconds and shows:
+Browse to `http://HOST:8631/`. The dashboard is a live **admin console** that
+streams updates over Server-Sent Events (no polling) and lets you search,
+inspect, export, and prune captures, plus control listeners and the engine.
 
-* **Stat cards** — total jobs, total bytes, per-protocol counts.
-* **Listener pills** — which ports are active.
-* **Job table** — time, protocol, source IP, user, host, job name, document
-  format, size, and a **download** link for each saved spool file.
+### UI features
+
+* **Stat cards** — total jobs, total bytes, per-protocol counts; **live** via
+  SSE.
+* **Per-listener health** — each configured listener with its status, plus an
+  **enable/disable** toggle (bounces the engine to apply).
+* **Engine controls** — **Start / Stop / Restart** the capture engine from the
+  toolbar.
+* **Job table** with **search** (free-text `q`), **protocol filter**, **sort**
+  (by any column) with **asc/desc** order, and **pagination**.
+* **Job detail + text preview** — open a job to see its metadata and the first
+  64 KiB of the captured bytes rendered as text.
+* **Delete** — remove a job and all of its on-disk artifacts (spool file,
+  `.json` sidecar, decoded sidecar, and any `-sent-*` transformed copies).
+* **Export** — download the (filtered) job list as **CSV** or **JSON**.
+* **Live log level** — change the running log level from the UI without a
+  restart.
+* **Light / dark theme** toggle.
 
 The dashboard keeps the **most recent 200 jobs** in memory for display; the full
 history lives on disk in the capture folder. Document bytes are **not** held in
-memory — downloads stream from the saved file.
+memory — previews and downloads stream from the saved file.
 
-### JSON API
+### JSON / API endpoints
+
+**Read (GET):**
 
 | Endpoint | Returns |
 |----------|---------|
 | `GET /api/stats` | Totals, per-protocol counts, active listeners, printer identity, save mode. |
-| `GET /api/jobs` | Array of recent jobs (metadata, newest first). |
-| `GET /api/config` | Effective configuration, **with SNMP community and TLS key paths redacted**. |
+| `GET /api/jobs` | **Paginated** envelope `{jobs, total, offset, limit}`. Query: `q`, `protocol`, `sort`, `order` (`asc`\|`desc`), `offset`, `limit` (default 50). |
 | `GET /api/job?id=N` | Downloads the saved spool file for job `N` (`Content-Disposition: attachment`). 404 if no saved data (e.g. `-save meta`). |
+| `GET /api/jobpreview?id=N` | First 64 KiB of the saved spool file as `text/plain` (for the detail preview). |
+| `GET /api/export?format=csv\|json` | The filtered job list (same query params as `/api/jobs`, no pagination) as a downloadable CSV or JSON file. |
+| `GET /api/listeners` | Runtime status of every configured listener. |
+| `GET /api/events` | **Server-Sent Events** stream of live stats, listeners, and level (pushed on connect, then ~every 1.5 s). |
+| `GET /api/config` | Effective configuration with **all secrets redacted** (SNMP community, SNMPv3 auth/priv passphrases, SMB passwords, service password, TLS cert/key paths). |
+| `GET /api/logs?level=&n=` | Recent log entries (newest first), filtered by minimum level, capped by `n`. |
+| `GET /api/logfile` | Downloads the active log file. |
+| `GET /api/version` | `{ "version": "<ver>" }`. |
 
-> The dashboard has **no authentication** — anyone who can reach the port sees
-> job metadata and can download captured documents. See §14.
+**State-changing (POST):**
+
+| Endpoint | Effect |
+|----------|--------|
+| `POST /api/jobdelete?id=N` | Delete job `N` and its on-disk artifacts. |
+| `POST /api/control?action=stop\|start\|restart` | Stop / start / restart the capture engine (responds, then bounces asynchronously — the dashboard briefly drops on stop/restart). |
+| `POST /api/listener?name=<n>&enabled=<bool>` | Enable/disable a single listener, then restart the engine to apply. |
+| `POST /api/loglevel?level=<lvl>` | Change the live log level without restarting. |
+
+> **CSRF guard:** every **state-changing** endpoint requires the request header
+> **`X-Requested-With: printcap`** (a browser cannot set a custom header on a
+> cross-origin "simple" request without a CORS preflight, which this server
+> never grants — so a site the operator visits can't drive-by POST to the local
+> dashboard). The built-in UI sends this header automatically; if you script
+> these endpoints with `curl`, add `-H "X-Requested-With: printcap"`.
+>
+> **No authentication.** The dashboard is **intentionally unauthenticated** —
+> anyone who can reach the port sees job metadata and can download captured
+> documents (the CSRF header is *not* an auth control). Bind it to a trusted
+> segment or loopback (`-bind 127.0.0.1`), disable it (`-dash 0`), or front it
+> with an authenticating reverse proxy if exposure is a concern. See §14.
 
 ---
 
@@ -745,7 +941,12 @@ Each accepted job produces, depending on `save` mode:
 * a **raw spool file** — extension chosen from the document format or sniffed
   magic bytes: `.pdf`, `.ps`, `.pcl`, `.jpg`, else `.prn`.
 * a **`.json` sidecar** — `protocol`, `source`, `received` (RFC3339),
-  `job_name`, `user`, `host`, `document_format`, `bytes`, `saved_as`.
+  `job_name`, `user`, `host`, `queue`, `document_format`, `pdl`, `bytes`,
+  `saved_as`, plus (when applicable) EBCDIC fields (`code_page`, `decoded_as`,
+  `class`, `title`), `dlp_matches` (the names of any DLP rules the job hit —
+  see §14.6), and `forwards` (per-target forward results).
+* an EBCDIC **`-decoded.txt` sidecar** when a job is transcoded (see §9 / §8).
+* transformed **`-sent-<target>` copies** for forwarded jobs (see §8).
 
 Filenames are unique and time-ordered:
 
@@ -757,8 +958,10 @@ Filenames are unique and time-ordered:
 ```
 
 `<seq>` is a per-run counter; `<jobname>` is sanitized (unsafe characters → `_`).
-There is no automatic deletion or rotation — manage retention yourself (see
-§16).
+Captures land in `out_dir`; the durable forward-retry queue (and its
+`forward-retry\dead\` dead-letter folder) lives under `storage.spool_dir`
+(see §6). **There is no automatic deletion or rotation of captures or
+dead-lettered items — manage retention yourself** (see §16).
 
 ---
 
@@ -772,10 +975,29 @@ There is no automatic deletion or rotation — manage retention yourself (see
   on half-open sockets); HTTP listeners enforce read-header (15 s), write
   (10 min), and idle (2 min) timeouts plus a 1 MB header cap (defeats Slowloris).
 * **TLS 1.2 minimum** for IPPS.
-* **SNMP** is read-only, drops wrong-community requests silently.
-* **Dashboard secrets** (community string, TLS key path) are redacted from
-  `/api/config`.
-* **Download path safety** — only files inside the capture directory are served.
+* **SNMP** is read-only, drops wrong-community requests silently. The **SNMPv3**
+  agent validates USM privacy parameters and rejects malformed encrypted
+  packets rather than crashing.
+* **Secret redaction.** Secrets are stored **plaintext in the config file** but
+  **redacted** everywhere they would otherwise be exposed — in `/api/config`
+  and in logs. This covers the **SNMP community string**, **SNMPv3 auth/priv
+  passphrases**, **SMB user passwords**, the **service password**, and the
+  **TLS cert/key file paths**. Because the file itself holds them in clear,
+  protect it with filesystem ACLs (see below).
+* **Dashboard hardening.**
+  * **CSRF guard** — state-changing endpoints require the
+    `X-Requested-With: printcap` header (§12), blocking cross-site drive-by
+    POSTs.
+  * **No script execution from captured bytes** — responses that serve
+    attacker-controlled file bytes (spool previews/downloads, log downloads)
+    send `X-Content-Type-Options: nosniff` and a restrictive
+    `Content-Security-Policy` (`default-src 'none'; sandbox`), so a hostile
+    captured document can't run as script in the dashboard origin.
+  * **CSV-injection-safe export** — cells that begin with `=`, `+`, `-`, `@`,
+    tab, or CR are quoted so a malicious job name/user can't become a formula
+    when the CSV export is opened in Excel/Sheets.
+* **Download path safety** — only files inside the capture directory are served
+  (filenames are constrained with `filepath.Base`).
 
 ### Operational considerations you must decide
 * **The dashboard is unauthenticated.** On a shared network, bind it locally
@@ -785,6 +1007,11 @@ There is no automatic deletion or rotation — manage retention yourself (see
   directory on an access-controlled volume; consider `-save meta` when you only
   need the audit trail, not contents. Apply NTFS ACLs and, where appropriate,
   disk encryption (BitLocker).
+* **Protect the config file with ACLs.** Secrets (SNMP community, SNMPv3
+  auth/priv passphrases, SMB passwords, the service password) live in
+  `printcap.json` in **clear text** — they are only redacted in `/api/config`
+  and logs, not on disk. Restrict the file (and the install folder) to
+  administrators / the service account.
 * **SNMP v1/v2c sends the community string in clear text** — this is inherent to
   the protocol. Treat SNMP as a discovery convenience, not a trust boundary.
   Disable with `-snmp 0` if not required.
@@ -794,6 +1021,51 @@ There is no automatic deletion or rotation — manage retention yourself (see
 * **Run with least privilege.** Only use Administrator/privileged ports when you
   genuinely need 515/631/161; otherwise move to high ports and run as a normal
   account (or a dedicated service account — see §15).
+
+### 14.6 Content inspection (DLP)
+
+The `dlp` block scans **captured** documents for sensitive content and raises an
+alert. It is **inspection-only** — it **never blocks or rejects** a job; it only
+tags and logs. Off by default (`dlp.enabled: false`).
+
+**How it works**
+
+* Each captured job is scanned against every rule in `dlp.rules`. A rule has a
+  `name`, a `mode` (`keyword` = case-insensitive substring, or `regex` = RE2),
+  and a `pattern`.
+* Matching runs over **both the raw captured bytes and the EBCDIC-decoded
+  text** (the decoded sidecar from §9), so a mainframe job whose plaintext only
+  exists after EBCDIC decoding is still inspected.
+* On a hit, printcap **tags the job** — the matched rule names appear as
+  `dlp_matches` in the job `.json` and in the dashboard/CSV export — and logs a
+  **`[DLP]`** warning naming the job, source, and rules matched, e.g.:
+
+  ```
+  2026-06-01 14:04:44.812 WARN  [DLP] job "Report.pdf" from 10.0.0.5:51840 matched rule(s): US SSN, Confidential marking
+  ```
+
+**Configuration example**
+
+```jsonc
+"dlp": {
+  "enabled": true,
+  "rules": [
+    { "name": "US SSN", "mode": "regex",
+      "pattern": "\\b\\d{3}-\\d{2}-\\d{4}\\b" },
+    { "name": "Confidential marking", "mode": "keyword",
+      "pattern": "CONFIDENTIAL" }
+  ]
+}
+```
+
+`printcap -check` validates rules (known `mode`, non-blank `pattern`, regex
+compiles) before you deploy them (§6).
+
+> **Limitation:** matching is over the document bytes (and any EBCDIC decode),
+> so it does **not** see content inside **compressed page-description
+> languages** — notably **PDF**, whose text/streams are usually deflated.
+> Keyword/regex rules will not match such compressed content. DLP is most
+> effective on text, PostScript, PCL, and EBCDIC line-printer streams.
 
 ---
 
@@ -813,37 +1085,57 @@ When the service is installed, the GUI's main **Start/Stop** button and status
 line track the *service* rather than the in-process engine.
 
 ### From the command line
-Run an **Administrator** prompt:
+The service commands **self-elevate** via UAC, so you can run them from an
+ordinary prompt (a consent dialog appears); a pre-elevated Administrator prompt
+also works:
 
 ```
 printcap.exe -service install     :: register, auto-start at boot
 printcap.exe -service start
-printcap.exe -service status
+printcap.exe -service status       :: read-only; does not elevate
 printcap.exe -service stop
 printcap.exe -service remove
 ```
 
-* **Install** registers the service as **Automatic** start, running as
-  **LocalSystem** (which can bind privileged ports), with the command line
-  `printcap.exe -config <path-to-printcap.json>`. The config path is whatever was
-  in effect when you installed (the `-config` flag, or `printcap.json` next to
-  the exe).
+* **Install** registers the service as **Automatic (Delayed Start)** — it
+  starts after the network stack is up — with the command line
+  `printcap.exe -config <path-to-printcap.json>` (the config path in effect when
+  you installed: the `-config` flag, or `printcap.json` next to the exe).
+* **Failure recovery.** Install configures the SCM **recovery actions** so the
+  service **auto-restarts on crash**, giving unattended resilience without a
+  watchdog.
+* **Run-as account.** By default the service runs as **LocalSystem** (which can
+  bind privileged ports). Set `service.account` (e.g. `.\svc_printcap` or
+  `DOMAIN\user`) and `service.password` in `printcap.json` **before** installing
+  to register the service under a dedicated least-privilege account instead;
+  that account needs write access to the capture/spool folders and the right to
+  bind any privileged ports you use. (`service.password` is redacted in
+  `/api/config`; protect the config file — §14.)
 * The service detects it was launched by the SCM and runs the capture engine
   headless. It logs to **`printcap.log`** next to the exe (rotating) and mirrors
   warnings/errors to the **Windows Event Log** (source "printcap") — see §16.
-* **Remove** stops the service first, then deletes it.
+* **Remove** stops the service first, then deletes it (and deregisters the
+  Event Log source).
+
+### Start the tray GUI at login
+The GUI's **Windows Service** tab has a **Start printcap when I sign in**
+checkbox that adds/removes a per-user *Run* entry, so the tray app launches at
+login. This is for the **interactive GUI** only — for unattended,
+session-independent background capture use the **service** (or `-console`).
 
 ### Service checklist
 * Set `out_dir` to an **absolute path** in `printcap.json` — a service's working
   directory is `C:\Windows\System32`, not your folder. Example:
-  `"out_dir": "C:\\printcap\\captures"`.
+  `"out_dir": "C:\\printcap\\captures"`. (The same applies to
+  `storage.spool_dir` and `log.file` if you override them — relative paths
+  resolve against the **exe directory**, not System32; see §6.)
 * Re-run `-service install` (or use the GUI Install button) after moving the exe,
   so the registered path stays correct.
 * Confirm the firewall rules from §5 exist — services don't trigger the
   interactive allow prompt.
-* To run as a dedicated low-privilege account instead of LocalSystem, change the
-  service's "Log On" account in `services.msc` and grant it write access to the
-  capture folder (and the right to bind any privileged ports you use).
+* To run least-privilege, prefer `service.account`/`service.password` (above)
+  at install time, or change the service's "Log On" account later in
+  `services.msc`.
 
 ---
 
@@ -859,11 +1151,18 @@ printcap has a leveled, multi-sink logging subsystem.
 2026-06-01 14:04:44.812 INFO  [IPP] captured 12345 bytes from 10.0.0.5 user=alice job="Report.pdf" queue=/ipp/print pdl=PDF -> 20260601-...-IPP-Report.pdf
 ```
 
-with a **component** tag: `[app] [engine] [9100] [LPR] [IPP] [SNMP] [svc]`.
+with a **component** tag: `[app] [engine] [9100] [LPR] [IPP] [SNMP] [svc]
+[config] [DLP] [fwd]`.
+
+The level can be changed **live** without a restart — from the dashboard
+toolbar or `POST /api/loglevel?level=<lvl>` (§12) — in addition to the GUI,
+`log.level`, and `-loglevel`/`-v`/`-vv`.
 
 **What each level adds**
 * `warn` — rejected jobs (disallowed LPD queue, non-privileged source port when
-  required), wrong SNMP community, listener bind failures.
+  required), wrong SNMP community, listener bind failures, **config validation
+  findings** (`[config]` — the same checks `-check` runs, logged at startup),
+  and **`[DLP]` content-inspection alerts** (§14.6).
 * `info` — every capture, listener start/stop.
 * `debug` — connections, spool-file writes, IPP operations.
 * `trace` — every LPD subcommand, every SNMP OID requested. Very verbose.
@@ -945,12 +1244,17 @@ process is alive, or check the listening ports / Event Log.
 | Download link 404 | Job saved in `meta` mode (no file) or file was deleted/rotated | Use `both`/`raw` save mode; check retention cleanup |
 | Captured file has `.prn` extension unexpectedly | Format wasn't advertised and magic bytes didn't match a known type | Normal — `.prn` is the raw-spool fallback; the bytes are intact |
 | Service starts but writes nothing | Relative `out_dir` resolved against the service working directory | Use an absolute `out_dir` and `-config` path (§15) |
+| A listener is missing / something seems misconfigured | A port conflict, bad enum, unwritable folder, etc. | Run `printcap.exe -config … -check` for a full list of issues + recommended fixes (§6); the same findings are logged as `[config]` at startup |
+| `dlp.rules` not matching, or a forward target failing repeatedly | Regex typo / wrong transport-address form | `-check` flags non-compiling regexes and implausible target addresses; check `[DLP]` / `[fwd]` log lines |
+| A spooled forward never delivers | Target down; job is in the durable retry queue | Inspect `storage.spool_dir`\\`forward-retry` (and `…\dead\` for give-ups); items replay on restart (§9) |
 
 ### Diagnostic steps
-1. Run interactively (not as a service) from an Administrator prompt and watch
-   the console — bind errors and per-job logs are immediate.
-2. Confirm listeners: `netstat -ano | findstr "9100 515 631 6310 161 8631"`.
-3. Test each path locally before involving real clients (see §19).
+1. **Validate the config** first: `printcap.exe -config <file> -check`. It prints
+   every issue with a recommended fix and exits non-zero on errors (§6).
+2. Run interactively (not as a service) from an Administrator prompt and watch
+   the console — bind errors, `[config]` warnings, and per-job logs are immediate.
+3. Confirm listeners: `netstat -ano | findstr "9100 515 631 6310 161 8631"`.
+4. Test each path locally before involving real clients (see §19).
 
 ---
 
@@ -1031,24 +1335,67 @@ deployment is fully functional. Replace `HOST` with the server's IP.
     HTTP + multicast, so the discovery probe and `http://<host>:3911/wsd` SOAP/MTOM
     endpoints can also be exercised from Linux/macOS without Windows.)
 
-If all thirteen pass, the deployment is good.
+14. **Config validation (`-check`)** — run
+    `printcap.exe -config <file> -check`. A clean config prints
+    `0 error(s), 0 warning(s)` and exits 0. Introduce a fault (e.g. set two
+    listeners to the same port, or `save: "xyz"`); `-check` reports the issue
+    with a recommended fix and exits non-zero.
+
+15. **DLP tagging** — set `dlp.enabled:true` with a rule, e.g.
+    `{ "name":"US SSN", "mode":"regex", "pattern":"\\b\\d{3}-\\d{2}-\\d{4}\\b" }`.
+    Send a job whose content contains a matching value (e.g. `123-45-6789`).
+    Confirm the job `.json` lists the rule under `dlp_matches`, the dashboard
+    shows the tag, and a `[DLP]` WARN line names the job and rule(s). The job is
+    still captured normally (DLP never blocks).
+
+16. **Dashboard admin features** — in `http://HOST:8631/`: **filter** the job
+    table by protocol and search text; open a job's **detail/preview**;
+    **delete** a job and confirm its files disappear from the capture folder;
+    **export** the list as CSV and JSON; toggle a listener **off** (per-listener
+    health control) and confirm that port stops `LISTENING`, then back on. (State
+    changes require the `X-Requested-With: printcap` header, which the UI sends;
+    a scripted `curl` without it gets HTTP 403.)
+
+17. **Durable forwarding** — set a target with `failure: "spool_retry"` pointing
+    at a port with **no** listener (so delivery fails). Print a job; confirm a
+    queued item appears under `storage.spool_dir`\\`forward-retry`. **Stop
+    printcap, then restart it** and confirm the item is **replayed** (a
+    `spool: replaying item …` log line). Start a listener at the target and
+    confirm delivery completes and the queued item is removed; or let it exhaust
+    `retry.ttl_min`/`max_attempts` and confirm it is **dead-lettered** into
+    `forward-retry\dead\` (kept, not deleted).
+
+If all seventeen pass, the deployment is good.
 
 ---
 
 ## 20. Upgrade & uninstall
 
 **Upgrade:** stop the process/service, replace `printcap.exe` with the new
-build, restart. Config files and captures are unaffected.
+build, restart. Config files, captures, and the spool/retry queue are
+unaffected. After replacing the exe, re-run `-service install` so the
+registered path stays correct (§15). Confirm the new build with
+`printcap.exe -version`.
 
-**Uninstall:**
-1. Stop and remove the service if installed:
-   `nssm stop printcap & nssm remove printcap confirm` (or
-   `schtasks /delete /tn printcap /f`).
-2. Remove the firewall rules:
-   `Remove-NetFirewallRule -DisplayName "printcap TCP","printcap SNMP"`.
-3. Delete the `C:\printcap\` folder (including captures, if no longer needed).
+**Uninstall (installer build):** use *Apps & features* / the bundled
+uninstaller. It stops and removes the service (deregistering the Event Log
+source) and deletes the firewall rules, but **deliberately keeps** your
+captured data, the spool/retry queue, and `printcap.json` — remove those
+manually if you no longer need them.
 
-There is no registry footprint beyond any service entry you created.
+**Uninstall (xcopy build):**
+1. Stop and remove the service if installed (self-elevates via UAC):
+   `printcap.exe -service stop` then `printcap.exe -service remove`. This also
+   deregisters the Event Log source.
+2. Remove the firewall rules: `printcap.exe -firewall remove` (deletes the
+   per-port printcap rules for the currently-configured ports).
+3. Delete the `C:\printcap\` folder (including `captures\`, `spool\`, and
+   `printcap.log`, if no longer needed).
+
+The only persistent system footprint is the service entry, the Event Log
+source, the firewall rules (all removed above), and — if you enabled
+*start at login* (§15) — a per-user *Run* registry value, which that checkbox
+removes when unticked.
 
 ---
 
