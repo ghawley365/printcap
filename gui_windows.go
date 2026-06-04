@@ -16,7 +16,9 @@ import (
 	dec "github.com/lxn/walk/declarative"
 )
 
-// The GUI is a single settings window that minimizes to the system tray. It
+// The GUI is a single settings window with a system-tray icon. Closing the
+// window quits printcap (the engine stops and the process exits); background
+// capture is done via the Windows service or -console. It
 // edits the shared cfg, persists it to configFilePath, and drives the capture
 // engine. "Smart" engine control: if the Windows service is installed, the
 // Start/Stop and status reflect the service; otherwise the engine runs
@@ -32,7 +34,6 @@ type protoRow struct {
 var (
 	mw         *walk.MainWindow
 	notifyIcon *walk.NotifyIcon
-	reallyExit bool
 
 	uiStatus    *walk.Label
 	uiStartStop *walk.PushButton
@@ -171,7 +172,7 @@ func runGUI() {
 		addTrayAction("Open Dashboard", openDashboard)
 		addTrayAction("Open Capture Folder", openFolder)
 		notifyIcon.ContextMenu().Actions().Add(walk.NewSeparatorAction())
-		addTrayAction("Exit", func() { reallyExit = true; mw.Close() })
+		addTrayAction("Exit", func() { mw.Close() })
 
 		// Show a tray balloon after each capture (gated by cfg.Notifications via
 		// notifyCapture). Marshalled onto the GUI thread; guarded against a nil
@@ -188,14 +189,17 @@ func runGUI() {
 		}
 	}
 
-	// Minimize/close to tray instead of exiting.
+	// Closing the window exits printcap. Stop the capture engine first (release
+	// listener ports + capture/spool files, send mDNS/WSD goodbye, drain all
+	// goroutines) and hide the tray icon, so the process fully terminates and no
+	// longer locks the executable. To keep capturing in the background, use the
+	// Windows service (Service tab) or run -console — closing the GUI is a quit.
 	mw.Closing().Attach(func(canceled *bool, reason walk.CloseReason) {
-		if !reallyExit {
-			*canceled = true
-			mw.Hide()
-			if notifyIcon != nil {
-				_ = notifyIcon.SetVisible(true)
-			}
+		if engineRunning() {
+			_ = engineStop()
+		}
+		if notifyIcon != nil {
+			_ = notifyIcon.SetVisible(false)
 		}
 	})
 
