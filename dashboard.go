@@ -157,7 +157,7 @@ func apiJobData(w http.ResponseWriter, r *http.Request) {
 	}
 	// SavedAs is a filename we generated; join to the output dir and confirm it
 	// stays inside it (defense in depth against traversal).
-	path := filepath.Join(cfg.OutDir, filepath.Base(j.SavedAs))
+	path := filepath.Join(captureDir(), filepath.Base(j.SavedAs))
 	f, err := os.Open(path)
 	if err != nil {
 		http.Error(w, "file not found", http.StatusNotFound)

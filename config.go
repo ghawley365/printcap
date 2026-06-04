@@ -47,6 +47,7 @@ type Config struct {
 	EBCDIC    EBCDICConf  `json:"ebcdic"`
 	SMB       SMBConf     `json:"smb"`
 	WSD       WSDConf     `json:"wsd"`
+	Storage   StorageConf `json:"storage"`
 }
 
 // EBCDICConf controls decoding of EBCDIC (mainframe) print streams into a
@@ -230,6 +231,13 @@ type WSDConf struct {
 	Discovery bool `json:"discovery"` // run the WS-Discovery multicast responder
 }
 
+// StorageConf configures where printcap writes generated files. Relative paths
+// resolve relative to the executable's directory so the app is portable; absolute
+// paths are used as-is. Nothing here is ever auto-deleted at shutdown.
+type StorageConf struct {
+	SpoolDir string `json:"spool_dir"` // forward retry queue + temp working files; blank = "<exe-dir>/spool"
+}
+
 // SMBUser is a credential the SMB share accepts (NTLMv2).
 type SMBUser struct {
 	User     string `json:"user"`
@@ -355,6 +363,7 @@ func defaultConfig() *Config {
 			Port:      3911,
 			Discovery: true,
 		},
+		Storage: StorageConf{SpoolDir: ""}, // empty = <exe-dir>/spool
 		Forward: ForwardConf{
 			Enabled: false,
 			Capture: "both",

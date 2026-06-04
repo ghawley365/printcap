@@ -160,7 +160,7 @@ func runConsole() {
 }
 
 func printBanner(n int) {
-	abs, _ := filepath.Abs(cfg.OutDir)
+	abs := captureDir()
 	fmt.Println("printcap — network print server & spool capture")
 	fmt.Printf("  printer    : %q (%s)\n", cfg.Printer.Name, cfg.Printer.MakeAndModel)
 	fmt.Printf("  output dir : %s  (mode=%s)\n", abs, cfg.Save)

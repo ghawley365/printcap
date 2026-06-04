@@ -7,7 +7,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 )
@@ -65,11 +64,11 @@ func (e *Engine) Start() (int, error) {
 	if e.running {
 		return len(e.active), nil
 	}
-	if err := os.MkdirAll(cfg.OutDir, 0o755); err != nil {
+	if err := ensureStorageDirs(); err != nil {
 		return 0, err
 	}
 	// (Re)initialize the capture sink and dashboard store for this run.
-	sink = &captureSink{dir: cfg.OutDir}
+	sink = &captureSink{dir: captureDir()}
 	store = newJobStore(200)
 
 	if cfg.Forward.Enabled {
