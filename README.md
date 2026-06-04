@@ -341,6 +341,31 @@ layer) — clients that force NTLM-level SEAL/key-exchange (e.g. `smbclient
 integrity. The share is a capture sink, not a real Windows spooler (no job
 status/management RPCs).
 
+## WSD (Windows network discovery & print)
+
+printcap also speaks **WSD** (Web Services for Devices) — the protocol behind
+Windows **Settings → Add a device**. With `-wsd` it answers WS-Discovery probes,
+serves DPWS metadata, and accepts WSPrint jobs, capturing them as `WSD` jobs
+through the same sink (PDL detection + forwarding). It is **experimental and off
+by default**, on port **3911** (SOAP) plus UDP **3702** (WS-Discovery multicast).
+
+A WSD print job arrives as `CreatePrintJob` (job name, user, format) followed by
+`SendDocument`, whose document rides as an **MTOM/XOP** attachment — printcap
+extracts the bytes and captures them. Control it in the `wsd` config block:
+`enabled` (or `-wsd`), `port`, and `discovery` (run the multicast responder; turn
+it off to serve only a directly-addressed XAddr). If UDP 3702 is already owned,
+discovery degrades gracefully and the SOAP endpoint still serves metadata/print.
+
+Verify (Linux/macOS, since the architecture is pure SOAP/HTTP + multicast):
+
+    # WS-Discovery probe (any WS-Discovery tool, or Windows "Add a device")
+    # then fetch metadata / print to http://<host>:3911/wsd
+
+On Windows: **Settings → Add a device** discovers printcap; install and print to
+it, and the job is captured. Stopping printcap sends a WS-Discovery **Bye** so the
+device disappears. Limitation: experimental; a capture endpoint, not a full WSD
+print service (no job-status subscriptions / bidirectional eventing).
+
 ## How clients reach it
 
 * **Raw/9100** — add a "Standard TCP/IP Port" printer pointing at the host, "Raw", port 9100.
