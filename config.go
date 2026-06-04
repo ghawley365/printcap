@@ -46,6 +46,7 @@ type Config struct {
 	Forward   ForwardConf `json:"forward"`
 	EBCDIC    EBCDICConf  `json:"ebcdic"`
 	SMB       SMBConf     `json:"smb"`
+	WSD       WSDConf     `json:"wsd"`
 }
 
 // EBCDICConf controls decoding of EBCDIC (mainframe) print streams into a
@@ -221,6 +222,14 @@ type MDNSConf struct {
 	AirPrint bool   `json:"airprint"`
 }
 
+// WSDConf drives the experimental WSD (Web Services for Devices) print service
+// that makes printcap discoverable/installable by Windows "Add a device".
+type WSDConf struct {
+	Enabled   bool `json:"enabled"`
+	Port      int  `json:"port"`
+	Discovery bool `json:"discovery"` // run the WS-Discovery multicast responder
+}
+
 // SMBUser is a credential the SMB share accepts (NTLMv2).
 type SMBUser struct {
 	User     string `json:"user"`
@@ -340,6 +349,11 @@ func defaultConfig() *Config {
 			Sign:        true,
 			Encrypt:     true,
 			Users:       []SMBUser{},
+		},
+		WSD: WSDConf{
+			Enabled:   false,
+			Port:      3911,
+			Discovery: true,
 		},
 		Forward: ForwardConf{
 			Enabled: false,

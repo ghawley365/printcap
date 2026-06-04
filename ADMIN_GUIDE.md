@@ -405,6 +405,12 @@ field to keep its default.
     ]
   },
 
+  "wsd": {
+    "enabled": false,            // master switch (also -wsd); experimental
+    "port": 3911,                // SOAP HTTP port (WS-Discovery uses UDP 3702)
+    "discovery": true            // run the WS-Discovery multicast responder
+  },
+
   "log": {
     "level": "info",           // error | warn | info | debug | trace
     "file": "",                // path; empty = printcap.log next to the exe
@@ -582,6 +588,17 @@ field to keep its default.
   > `require_auth:true` with real credentials where possible, and prefer a
   > firewall rule scoping the `4445` port. It is not a general-purpose file server
   > — only the `\spoolss` print pipe over `IPC$` is serviced.
+* **`wsd`** — **experimental** WSD (Web Services for Devices) print service, the
+  protocol behind Windows "Add a device" (off by default; enable with `-wsd`).
+  `port` (default `3911`, the SOAP HTTP endpoint `/wsd`; WS-Discovery additionally
+  uses UDP `3702` multicast), and `discovery` (run the WS-Discovery responder —
+  set `false` to serve only a directly-addressed XAddr). Captured jobs appear as
+  `WSD` with the document name, user, and format; the document arrives as an
+  MTOM/XOP attachment.
+  > **Security note:** like the SMB surface, this hand-rolls SOAP/WS-Discovery/
+  > MTOM parsing of untrusted network input — run it on trusted segments and scope
+  > the `3911`/`3702` ports with a firewall rule. It is a capture endpoint, not a
+  > full WSD spooler.
 
 ---
 
@@ -1006,7 +1023,15 @@ deployment is fully functional. Replace `HOST` with the server's IP.
     Confirm an `SMB` job is captured with the document name, flows through PDL
     detection + forwarding, and that `/api/config` redacts the SMB password.
 
-If all twelve pass, the deployment is good.
+13. **WSD (experimental)** — set `wsd.enabled:true` (or `-wsd`). On Windows:
+    **Settings → Add a device** discovers printcap; install and print a test page;
+    confirm a `WSD` job is captured with the document name, user, and format,
+    flowing through PDL detection + forwarding. Stopping printcap sends a
+    WS-Discovery **Bye** and the device disappears. (Architecture is pure SOAP/
+    HTTP + multicast, so the discovery probe and `http://<host>:3911/wsd` SOAP/MTOM
+    endpoints can also be exercised from Linux/macOS without Windows.)
+
+If all thirteen pass, the deployment is good.
 
 ---
 

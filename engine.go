@@ -164,6 +164,12 @@ func (e *Engine) Start() (int, error) {
 		addTCP("SMB", cfg.SMB.Port, serveSMB)
 	}
 
+	if cfg.WSD.Enabled {
+		if w := startWSD(); w != nil {
+			e.closers = append(e.closers, w)
+		}
+	}
+
 	if cfg.MDNS.Enabled {
 		host := resolveHost()
 		v4, v6 := localAddrs(cfg.Bind)
