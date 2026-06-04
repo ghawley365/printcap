@@ -331,8 +331,15 @@ Verify from a Linux/macOS client with Samba's `smbclient`:
     smbclient //HOST/PRINTER -p 4445 -U user%pass        # NTLMv2
     # then at the smb> prompt:  print somefile.pcl
 
-Limitations: experimental; AES-128-GCM only (CCM not implemented); the share is a
-capture sink, not a real Windows spooler (no job status/management RPCs).
+Verified end-to-end against Samba `smbclient` 4.x: guest, NTLMv2-authenticated,
+and AES-CMAC-**signed** print all capture correctly.
+
+Limitations: experimental; AES-128-GCM only (CCM not implemented); SMB3 response
+encryption mirrors the client (engaged when the client encrypts at the SMB3
+layer) — clients that force NTLM-level SEAL/key-exchange (e.g. `smbclient
+--client-protection=encrypt`) are not supported, so use **signing** for
+integrity. The share is a capture sink, not a real Windows spooler (no job
+status/management RPCs).
 
 ## How clients reach it
 
