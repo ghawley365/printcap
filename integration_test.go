@@ -316,9 +316,13 @@ func TestDashboardAPIEndpoints(t *testing.T) {
 		t.Fatalf("stats total = %d, want >=1", stats.Stats.Total)
 	}
 
-	// /api/jobs — the captured job is listed with its fields.
-	var jobs []job
-	getJSON(t, "http://127.0.0.1:18631/api/jobs", &jobs)
+	// /api/jobs — the captured job is listed with its fields (paged envelope).
+	var jobsResp struct {
+		Jobs  []job `json:"jobs"`
+		Total int   `json:"total"`
+	}
+	getJSON(t, "http://127.0.0.1:18631/api/jobs", &jobsResp)
+	jobs := jobsResp.Jobs
 	if len(jobs) < 1 {
 		t.Fatalf("no jobs from /api/jobs")
 	}

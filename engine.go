@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -49,6 +50,72 @@ type Engine struct {
 }
 
 var engine = &Engine{}
+
+// Runtime per-listener enable/disable overrides. Disabling a listener keeps its
+// config intact but skips binding it on the next Start(); the dashboard toggles
+// these and bounces the engine so the change takes effect.
+var (
+	listenerMu       sync.Mutex
+	disabledListener = map[string]bool{} // listener name -> disabled
+)
+
+func listenerDisabled(name string) bool {
+	listenerMu.Lock()
+	defer listenerMu.Unlock()
+	return disabledListener[name]
+}
+
+func setListenerDisabled(name string, off bool) {
+	listenerMu.Lock()
+	defer listenerMu.Unlock()
+	disabledListener[name] = off
+}
+
+// listenerStatus is the runtime view of one configured listener for the API.
+type listenerStatus struct {
+	Name     string `json:"name"`
+	Port     int    `json:"port"`
+	Up       bool   `json:"up"`       // currently bound/active this run
+	Disabled bool   `json:"disabled"` // turned off via the runtime override
+}
+
+// listenerStatuses returns the configured listeners with their current state.
+// Up is derived from the engine's active listener descriptions ("IPP:631"), so
+// a listener counts as up only if it actually bound this run.
+func listenerStatuses() []listenerStatus {
+	active := map[string]bool{} // listener name (prefix before ':') -> up
+	for _, a := range engine.Active() {
+		name := a
+		if i := strings.LastIndex(a, ":"); i >= 0 {
+			name = a[:i]
+		}
+		active[name] = true
+	}
+	defs := []struct {
+		name string
+		port int
+	}{
+		{"9100", cfg.Ports.Raw9100},
+		{"LPR", cfg.Ports.LPR},
+		{"IPP", cfg.Ports.IPP},
+		{"IPPS", cfg.Ports.IPPS},
+		{"dashboard", cfg.Ports.Dashboard},
+		{"SNMP", snmpPortIfEnabled()},
+		{"SMB", cfg.SMB.Port},
+		{"WSD", cfg.WSD.Port},
+		{"mDNS", 0},
+	}
+	out := make([]listenerStatus, 0, len(defs))
+	for _, d := range defs {
+		out = append(out, listenerStatus{
+			Name:     d.name,
+			Port:     d.port,
+			Up:       active[d.name],
+			Disabled: listenerDisabled(d.name),
+		})
+	}
+	return out
+}
 
 // engineLog, when set (by the GUI), receives listener start/stop diagnostics in
 // addition to the standard logger.
@@ -137,7 +204,7 @@ func (e *Engine) Start() (int, error) {
 	}
 
 	// Auto-TLS single port (serves both IPP and IPPS).
-	if ports.AutoTLS > 0 {
+	if ports.AutoTLS > 0 && !listenerDisabled("IPP") && !listenerDisabled("IPPS") {
 		if tlsCfg, err := tlsConfig(); err != nil {
 			e.logf("IPP/IPPS: %v", err)
 		} else if ln, err := net.Listen("tcp", bindAddr(ports.AutoTLS)); err != nil {
@@ -150,19 +217,25 @@ func (e *Engine) Start() (int, error) {
 		}
 	}
 
-	if addTCP("9100", ports.Raw9100, serveRaw9100) {
-		bl.Raw9100 = ports.Raw9100
+	if !listenerDisabled("9100") {
+		if addTCP("9100", ports.Raw9100, serveRaw9100) {
+			bl.Raw9100 = ports.Raw9100
+		}
+		for _, ep := range cfg.Raw.ExtraPorts {
+			addTCP("9100", ep, serveRaw9100) // multi-port raw servers (9101, 9102, …)
+		}
 	}
-	for _, ep := range cfg.Raw.ExtraPorts {
-		addTCP("9100", ep, serveRaw9100) // multi-port raw servers (9101, 9102, …)
+	if !listenerDisabled("LPR") {
+		if addTCP("LPR", ports.LPR, serveLPD) {
+			bl.LPR = ports.LPR
+		}
 	}
-	if addTCP("LPR", ports.LPR, serveLPD) {
-		bl.LPR = ports.LPR
+	if !listenerDisabled("IPP") {
+		if addHTTP("IPP", ports.IPP, nil, http.HandlerFunc(ippHandler)) {
+			bl.IPP = ports.IPP
+		}
 	}
-	if addHTTP("IPP", ports.IPP, nil, http.HandlerFunc(ippHandler)) {
-		bl.IPP = ports.IPP
-	}
-	if ports.IPPS > 0 {
+	if ports.IPPS > 0 && !listenerDisabled("IPPS") {
 		if tlsCfg, err := tlsConfig(); err != nil {
 			e.logf("IPPS: %v", err)
 		} else {
@@ -172,7 +245,7 @@ func (e *Engine) Start() (int, error) {
 		}
 	}
 
-	if cfg.SNMP.Enabled && ports.SNMP > 0 {
+	if cfg.SNMP.Enabled && ports.SNMP > 0 && !listenerDisabled("SNMP") {
 		if pc, err := net.ListenPacket("udp", bindAddr(ports.SNMP)); err != nil {
 			e.logf("SNMP: %v", err)
 		} else {
@@ -183,23 +256,23 @@ func (e *Engine) Start() (int, error) {
 		}
 	}
 
-	if cfg.Dashboard.Enabled && ports.Dashboard > 0 {
+	if cfg.Dashboard.Enabled && ports.Dashboard > 0 && !listenerDisabled("dashboard") {
 		if addHTTP("dashboard", ports.Dashboard, nil, dashboardHandler()) {
 			bl.Dash = ports.Dashboard
 		}
 	}
 
-	if cfg.SMB.Enabled {
+	if cfg.SMB.Enabled && !listenerDisabled("SMB") {
 		addTCP("SMB", cfg.SMB.Port, serveSMB)
 	}
 
-	if cfg.WSD.Enabled {
+	if cfg.WSD.Enabled && !listenerDisabled("WSD") {
 		if w := startWSD(); w != nil {
 			e.closers = append(e.closers, w)
 		}
 	}
 
-	if cfg.MDNS.Enabled {
+	if cfg.MDNS.Enabled && !listenerDisabled("mDNS") {
 		host := resolveHost()
 		v4, v6 := localAddrs(cfg.Bind)
 		svcs := buildServices(bl, cfg.MDNS.AirPrint, resolveInstance())
