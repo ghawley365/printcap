@@ -99,6 +99,7 @@ func main() {
 	flag.Bool("forward", false, "enable the transform & forward proxy")
 	flag.Bool("mdns", true, "advertise the printer over mDNS/DNS-SD (Bonjour)")
 	flag.Bool("smb", false, "enable the experimental SMB print share")
+	flag.Bool("wsd", false, "enable the experimental WSD print service")
 	flag.Parse()
 
 	// Resolve the config file path (explicit flag, else next to the exe).
@@ -224,6 +225,8 @@ func applyFlagOverrides() {
 			cfg.MDNS.Enabled = get() == "true"
 		case "smb":
 			cfg.SMB.Enabled = true
+		case "wsd":
+			cfg.WSD.Enabled = true
 		}
 	})
 }
