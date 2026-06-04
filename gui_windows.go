@@ -1210,11 +1210,10 @@ func openDashboard() {
 }
 
 func openFolder() {
-	dir, err := filepath.Abs(cfg.OutDir)
-	if err != nil {
-		dir = cfg.OutDir
-	}
-	_ = exec.Command("explorer", dir).Start()
+	// Use captureDir() so the tray "open captures folder" opens the SAME
+	// (exe-relative) directory the engine actually writes to, even when the
+	// process cwd differs from the exe dir (e.g. running as a service).
+	_ = exec.Command("explorer", captureDir()).Start()
 }
 
 func addTrayAction(text string, fn func()) {
@@ -1236,7 +1235,7 @@ func browseFile(target *walk.LineEdit) {
 func onGenerateCert() {
 	dir := strings.TrimSpace(uiOut.Text())
 	if dir == "" {
-		dir = cfg.OutDir
+		dir = captureDir()
 	}
 	absdir, err := filepath.Abs(dir)
 	if err != nil {

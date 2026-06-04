@@ -1,9 +1,0 @@
-2026-06-03 22:36:25.235 INFO  [app] printcap starting (config "/Users/garyhawley/Desktop/SNMP Data/printcap/printcap.json", level INFO)
-2026-06-03 22:36:25.237 INFO  [engine] listening 9100 on 0.0.0.0:19100
-2026-06-03 22:36:25.238 INFO  [engine] listening dashboard on 0.0.0.0:18650
-2026-06-03 22:36:25.493 INFO  [mDNS] advertising 1 service(s) as "printcap.local" [_pdl-datastream._tcp]
-2026-06-03 22:36:25.493 INFO  [engine] started: 2 listener(s) [9100:19100, dashboard:18650]
-2026-06-03 22:36:26.931 INFO  [9100] captured 28 bytes from 127.0.0.1:62700 user=? job="" queue=? pdl=Text -> 20260603-223626-0001-9100.txt
-2026-06-03 22:36:26.938 INFO  [9100] captured 20 bytes from 127.0.0.1:62701 user=? job="" queue=? pdl=Text -> 20260603-223626-0002-9100.txt
-2026-06-03 22:36:43.477 INFO  [mDNS] withdrawn
-2026-06-03 22:36:43.477 INFO  [engine] stopped (all listeners closed)
