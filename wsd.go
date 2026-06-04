@@ -6,16 +6,12 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 )
 
 // maxWSDBody bounds the SOAP request body we will read, protecting memory
 // against oversized or hostile POSTs.
 const maxWSDBody = 32 << 20
-
-// wsprintDispatch is an optional hook for WSPrint (wprt) operations, wired in a
-// later stage. When non-nil it is consulted for actions the core dispatch does
-// not handle; if it returns (resp, true) the response is written verbatim.
-var wsprintDispatch func(env soapEnvelope, r *http.Request) ([]byte, bool)
 
 // deviceUUID derives a STABLE WSD device EPR (urn:uuid:...) from the host name,
 // so the same machine always presents the same WSD endpoint reference across
@@ -77,7 +73,20 @@ func wsdHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "read error", http.StatusBadRequest)
 		return
 	}
-	env, ok := parseSOAP(body)
+
+	// MTOM/XOP: when the request is multipart/related the SOAP envelope is the
+	// root part and binary documents arrive as separate attachments keyed by CID.
+	root := body
+	var parts map[string][]byte
+	if ct := r.Header.Get("Content-Type"); strings.HasPrefix(ct, "multipart/related") {
+		root, parts, err = extractMTOM(ct, body)
+		if err != nil {
+			http.Error(w, "bad MTOM", http.StatusBadRequest)
+			return
+		}
+	}
+
+	env, ok := parseSOAP(root)
 	if !ok {
 		http.Error(w, "bad SOAP", http.StatusBadRequest)
 		return
@@ -90,11 +99,9 @@ func wsdHandler(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(buildMetadataResponse(env.MessageID))
 		return
 	default:
-		if wsprintDispatch != nil {
-			if resp, handled := wsprintDispatch(env, r); handled {
-				_, _ = w.Write(resp)
-				return
-			}
+		if resp, handled := wsprintHandle(env, parts, r.RemoteAddr); handled {
+			_, _ = w.Write(resp)
+			return
 		}
 		_, _ = w.Write(soapFault(env.MessageID, "Sender", "wsa:ActionNotSupported", "Action not supported"))
 	}
