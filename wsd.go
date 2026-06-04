@@ -50,10 +50,11 @@ func startWSD() *wsdServer {
 		return nil
 	}
 	srv := hardenedServer("", mux)
-	// Appending srv (not the listener) ensures Close() stops the HTTP server,
-	// which in turn closes the listener it is serving.
-	w.closers = append(w.closers, srv)
-	go func() { _ = srv.Serve(ln) }()
+	// Append a graceful httpCloser (not the bare listener/server) so Close()
+	// drains in-flight SOAP handlers via Shutdown before force-closing, then
+	// closes the listener it is serving.
+	w.closers = append(w.closers, httpCloser{srv})
+	trackGo(func() { _ = srv.Serve(ln) })
 	logInfo("WSD", "SOAP print service on %s", wsdEndpoint)
 
 	if cfg.WSD.Discovery {

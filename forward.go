@@ -18,6 +18,7 @@ type forwarder struct {
 	capture string
 	macros  map[string][]byte
 	targets []*target
+	spool   *spoolStore // durable on-disk spool_retry queue (nil if it couldn't be created)
 	wg      sync.WaitGroup
 	done    chan struct{} // closed by Close() to release in-flight retry workers
 }
@@ -64,7 +65,48 @@ func newForwarder(c ForwardConf) (*forwarder, error) {
 			retry: tc.Retry, steps: steps, send: send,
 		})
 	}
+
+	// Create the durable spool_retry store. If it can't be created, forwarding
+	// still works — just not durably (a restart could drop in-flight retries).
+	if st, err := newSpoolStore(filepath.Join(spoolDir(), "forward-retry")); err != nil {
+		logErr("fwd", "spool: durable retry queue disabled: %v", err)
+	} else {
+		f.spool = st
+		f.replaySpool()
+	}
 	return f, nil
+}
+
+// replaySpool reloads any persisted spool_retry items from disk and resumes a
+// durable retry loop for each. Items whose target no longer exists in config are
+// left on disk (a future config may restore the target). NextAttempt is honored
+// by retryLoopPersisted so we don't hammer immediately on restart.
+func (f *forwarder) replaySpool() {
+	items, err := f.spool.load()
+	if err != nil {
+		logErr("fwd", "spool: replay load failed: %v", err)
+		return
+	}
+	for _, m := range items {
+		t := f.targetByName(m.Target)
+		if t == nil {
+			logWarn("fwd", "spool: item %s targets unknown target %q, leaving on disk", m.ID, m.Target)
+			continue
+		}
+		logInfo("fwd", "spool: replaying item %s for target %q (attempts=%d)", m.ID, m.Target, m.Attempts)
+		mm := m
+		f.wg.Add(1)
+		go func() { defer f.wg.Done(); f.retryLoopPersisted(t, mm) }()
+	}
+}
+
+func (f *forwarder) targetByName(name string) *target {
+	for _, t := range f.targets {
+		if t.name == name {
+			return t
+		}
+	}
+	return nil
 }
 
 func (f *forwarder) compileSteps(in []TransformStep) ([]compiledStep, error) {
@@ -158,10 +200,31 @@ func (f *forwarder) deliver(t *target, data []byte, j *job) error {
 		return nil
 	case "spool_retry":
 		record("queued", nil)
-		rj := &job{Host: j.Host, User: j.User, JobName: j.JobName, Queue: j.Queue}
 		payload := append([]byte{}, data...)
+		now := time.Now()
+		m := &spoolMeta{
+			Target: t.name, Attempts: 0, FirstSeen: now, NextAttempt: now,
+			Host: j.Host, User: j.User, JobName: j.JobName, Queue: j.Queue,
+		}
+		if t.retry.TTLMin > 0 {
+			m.Deadline = now.Add(time.Duration(t.retry.TTLMin) * time.Minute)
+		}
+		if f.spool == nil {
+			// No durable store: fall back to a best-effort in-memory retry so we
+			// still attempt delivery (just not crash-safe).
+			logWarn("fwd", "target %q: spool store unavailable, retrying in-memory (not durable)", t.name)
+			f.wg.Add(1)
+			go func() { defer f.wg.Done(); f.retryLoopMem(t, payload, m) }()
+			return nil
+		}
+		if err := f.spool.put(m, payload); err != nil {
+			logErr("fwd", "target %q: failed to persist spool item: %v", t.name, err)
+			f.wg.Add(1)
+			go func() { defer f.wg.Done(); f.retryLoopMem(t, payload, m) }()
+			return nil
+		}
 		f.wg.Add(1)
-		go func() { defer f.wg.Done(); f.retryLoop(t, payload, rj) }()
+		go func() { defer f.wg.Done(); f.retryLoopPersisted(t, m) }()
 		return nil
 	default: // best_effort
 		if err := t.send.send(t, data, j); err != nil {
@@ -175,41 +238,115 @@ func (f *forwarder) deliver(t *target, data []byte, j *job) error {
 	}
 }
 
-// retryLoop attempts delivery with backoff up to max_attempts OR the ttl_min
-// wall-clock deadline. It carries a cloned job (preserving LPR H/P/J) and selects
-// on f.done during backoff so Close() releases it promptly.
-func (f *forwarder) retryLoop(t *target, data []byte, j *job) {
-	max := t.retry.MaxAttempts
+// retryLimits returns the effective max attempts and backoff for a target,
+// applying the historical defaults (3 attempts, 2s backoff).
+func (t *target) retryLimits() (max int, backoff time.Duration) {
+	max = t.retry.MaxAttempts
 	if max <= 0 {
 		max = 3
 	}
-	backoff := time.Duration(t.retry.BackoffMS) * time.Millisecond
+	backoff = time.Duration(t.retry.BackoffMS) * time.Millisecond
 	if backoff <= 0 {
 		backoff = 2 * time.Second
 	}
-	var deadline time.Time
-	if t.retry.TTLMin > 0 {
-		deadline = time.Now().Add(time.Duration(t.retry.TTLMin) * time.Minute)
+	return
+}
+
+func jobFromMeta(m *spoolMeta) *job {
+	return &job{Host: m.Host, User: m.User, JobName: m.JobName, Queue: m.Queue}
+}
+
+// retryLoopPersisted is the durable spool_retry worker. It loads the payload
+// from the store once, then retries with backoff up to max_attempts OR the TTL
+// deadline. Successful delivery removes the persisted item; a give-up (max
+// attempts or TTL) dead-letters it. On shutdown (f.done) it returns WITHOUT
+// deleting the item — the item survives and is replayed by the next
+// newForwarder. That is the durability guarantee.
+func (f *forwarder) retryLoopPersisted(t *target, m *spoolMeta) {
+	max, backoff := t.retryLimits()
+	payload, err := f.spool.payload(m.ID)
+	if err != nil {
+		logErr("fwd", "target %q: spool item %s payload unreadable, dead-lettering: %v", t.name, m.ID, err)
+		if derr := f.spool.deadLetter(m.ID); derr != nil {
+			logErr("fwd", "target %q: dead-letter %s failed: %v", t.name, m.ID, derr)
+		}
+		return
 	}
-	for attempt := 1; attempt <= max; attempt++ {
-		if !deadline.IsZero() && time.Now().After(deadline) {
-			logErr("fwd", "target %q: TTL (%d min) expired after %d attempt(s)", t.name, t.retry.TTLMin, attempt-1)
+	j := jobFromMeta(m)
+
+	// Honor a future NextAttempt across a restart: sleep until it's due,
+	// releasing promptly on shutdown.
+	if d := time.Until(m.NextAttempt); d > 0 {
+		select {
+		case <-f.done:
+			return
+		case <-time.After(d):
+		}
+	}
+
+	for {
+		if !m.Deadline.IsZero() && time.Now().After(m.Deadline) {
+			logErr("fwd", "target %q: spool item %s TTL expired after %d attempt(s), dead-lettering", t.name, m.ID, m.Attempts)
+			if derr := f.spool.deadLetter(m.ID); derr != nil {
+				logErr("fwd", "target %q: dead-letter %s failed: %v", t.name, m.ID, derr)
+			}
 			return
 		}
-		if err := t.send.send(t, data, j); err == nil {
-			logInfo("fwd", "target %q: spooled job delivered on attempt %d", t.name, attempt)
+		if err := t.send.send(t, payload, j); err == nil {
+			logInfo("fwd", "target %q: spooled job %s delivered on attempt %d", t.name, m.ID, m.Attempts+1)
+			if rerr := f.spool.remove(m.ID); rerr != nil {
+				logErr("fwd", "target %q: removing delivered spool item %s failed: %v", t.name, m.ID, rerr)
+			}
+			return
+		} else {
+			m.Attempts++
+			m.NextAttempt = time.Now().Add(backoff)
+			logWarn("fwd", "target %q: spool item %s attempt %d/%d failed: %v", t.name, m.ID, m.Attempts, max, err)
+			if uerr := f.spool.update(m); uerr != nil {
+				logErr("fwd", "target %q: updating spool item %s failed: %v", t.name, m.ID, uerr)
+			}
+			if m.Attempts >= max {
+				logErr("fwd", "target %q: giving up on spool item %s after %d attempts, dead-lettering", t.name, m.ID, m.Attempts)
+				if derr := f.spool.deadLetter(m.ID); derr != nil {
+					logErr("fwd", "target %q: dead-letter %s failed: %v", t.name, m.ID, derr)
+				}
+				return
+			}
+		}
+		select {
+		case <-f.done:
+			// Shutdown: leave the item persisted; it is replayed next start.
+			return
+		case <-time.After(backoff):
+		}
+	}
+}
+
+// retryLoopMem is the non-durable fallback used only when the spool store could
+// not be created or a put failed. It retries in memory and is abandoned on
+// shutdown (lost on restart) — same behavior as the pre-durability code.
+func (f *forwarder) retryLoopMem(t *target, payload []byte, m *spoolMeta) {
+	max, backoff := t.retryLimits()
+	j := jobFromMeta(m)
+	for attempt := 1; attempt <= max; attempt++ {
+		if !m.Deadline.IsZero() && time.Now().After(m.Deadline) {
+			logErr("fwd", "target %q: TTL expired after %d attempt(s)", t.name, attempt-1)
+			return
+		}
+		if err := t.send.send(t, payload, j); err == nil {
+			logInfo("fwd", "target %q: spooled job delivered on attempt %d (in-memory)", t.name, attempt)
 			return
 		} else {
 			logWarn("fwd", "target %q: attempt %d/%d failed: %v", t.name, attempt, max, err)
 		}
 		select {
 		case <-f.done:
-			logWarn("fwd", "target %q: shutdown during retry, abandoning spooled job", t.name)
+			logWarn("fwd", "target %q: shutdown during retry, abandoning in-memory spooled job", t.name)
 			return
 		case <-time.After(backoff):
 		}
 	}
-	logErr("fwd", "target %q: giving up after %d attempts", t.name, max)
+	logErr("fwd", "target %q: giving up after %d attempts (in-memory)", t.name, max)
 }
 
 // Close signals in-flight retry workers to stop and waits for them to exit.

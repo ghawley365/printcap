@@ -6,17 +6,20 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"syscall"
 )
 
-// Windows Defender Firewall integration via netsh. We add program-scoped
-// inbound allow rules (one for TCP, one for UDP) for this exe, so every port
-// printcap listens on is permitted without enumerating them — and the rules
-// keep working if you reconfigure ports later. Requires Administrator.
+// Windows Defender Firewall integration via netsh. We add inbound allow rules
+// that are BOTH program-scoped (this exe) AND port-scoped — one rule per port
+// printcap actually listens on. Per-port least-privilege rules are what
+// enterprise security teams expect over a blanket program rule. Requires
+// Administrator.
 
 const (
-	fwRuleTCP = "printcap (TCP in)"
-	fwRuleUDP = "printcap (UDP in)"
+	// Legacy blanket rule names, removed on upgrade so old installs are cleaned up.
+	fwLegacyTCP = "printcap (TCP in)"
+	fwLegacyUDP = "printcap (UDP in)"
 )
 
 // runHidden runs a console command without flashing a window (the GUI build has
@@ -31,53 +34,120 @@ func runHidden(name string, args ...string) error {
 	return nil
 }
 
-// addFirewallRules creates inbound allow rules for this executable. Idempotent:
-// it removes any existing printcap rules first.
-func addFirewallRules() error {
+// firewallPorts returns the configured inbound ports grouped by protocol, based
+// on the live cfg. Zero/disabled ports are skipped. Recomputed on every call so
+// add/remove always reflect the current configuration.
+func firewallPorts() (tcp, udp []int) {
+	add := func(dst *[]int, p int) {
+		if p > 0 {
+			*dst = append(*dst, p)
+		}
+	}
+
+	// TCP listeners.
+	add(&tcp, cfg.Ports.Raw9100)
+	for _, p := range cfg.Raw.ExtraPorts {
+		add(&tcp, p)
+	}
+	add(&tcp, cfg.Ports.LPR)
+	add(&tcp, cfg.Ports.IPP)
+	add(&tcp, cfg.Ports.IPPS)
+	add(&tcp, cfg.Ports.AutoTLS)
+	add(&tcp, cfg.Ports.Dashboard)
+	if cfg.SMB.Enabled {
+		add(&tcp, cfg.SMB.Port)
+	}
+	if cfg.WSD.Enabled {
+		add(&tcp, cfg.WSD.Port)
+	}
+
+	// UDP listeners.
+	if cfg.SNMP.Enabled {
+		add(&udp, cfg.Ports.SNMP)
+	}
+	if cfg.MDNS.Enabled {
+		add(&udp, 5353) // mDNS / DNS-SD
+	}
+	if cfg.WSD.Enabled {
+		add(&udp, 3702) // WS-Discovery multicast
+	}
+	return tcp, udp
+}
+
+// fwRuleName builds the per-port rule name, e.g. "printcap TCP 9100".
+func fwRuleName(proto string, port int) string {
+	return "printcap " + proto + " " + strconv.Itoa(port)
+}
+
+// addFirewallRules creates per-port inbound allow rules for this executable.
+// Idempotent: it removes any existing printcap rules first. Returns the number
+// of rules added.
+func addFirewallRules() (int, error) {
 	exe, err := os.Executable()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	_ = removeFirewallRules() // best-effort cleanup so we don't stack duplicates
 
-	if err := runHidden("netsh", "advfirewall", "firewall", "add", "rule",
-		"name="+fwRuleTCP, "dir=in", "action=allow", "program="+exe,
-		"protocol=TCP", "profile=any", "enable=yes"); err != nil {
-		return err
+	tcp, udp := firewallPorts()
+	add := func(proto string, port int) error {
+		return runHidden("netsh", "advfirewall", "firewall", "add", "rule",
+			"name="+fwRuleName(proto, port), "dir=in", "action=allow", "program="+exe,
+			"protocol="+proto, "localport="+strconv.Itoa(port), "profile=any", "enable=yes")
 	}
-	if err := runHidden("netsh", "advfirewall", "firewall", "add", "rule",
-		"name="+fwRuleUDP, "dir=in", "action=allow", "program="+exe,
-		"protocol=UDP", "profile=any", "enable=yes"); err != nil {
-		return err
+
+	n := 0
+	for _, p := range tcp {
+		if err := add("TCP", p); err != nil {
+			return n, err
+		}
+		n++
 	}
-	return nil
+	for _, p := range udp {
+		if err := add("UDP", p); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
 }
 
-// removeFirewallRules deletes the printcap firewall rules (best-effort).
+// removeFirewallRules deletes every per-port printcap rule for the CURRENTLY
+// known port set, plus the legacy blanket rule names (so upgrades clean up old
+// rules). Best-effort per name.
 func removeFirewallRules() error {
-	_ = runHidden("netsh", "advfirewall", "firewall", "delete", "rule", "name="+fwRuleTCP)
-	_ = runHidden("netsh", "advfirewall", "firewall", "delete", "rule", "name="+fwRuleUDP)
+	del := func(name string) {
+		_ = runHidden("netsh", "advfirewall", "firewall", "delete", "rule", "name="+name)
+	}
+
+	tcp, udp := firewallPorts()
+	for _, p := range tcp {
+		del(fwRuleName("TCP", p))
+	}
+	for _, p := range udp {
+		del(fwRuleName("UDP", p))
+	}
+	// Legacy blanket rules from older installs.
+	del(fwLegacyTCP)
+	del(fwLegacyUDP)
 	return nil
 }
 
 // firewallControl handles the -firewall CLI flag.
 func firewallControl(cmd string) {
-	var err error
 	switch cmd {
 	case "add", "allow":
-		if err = addFirewallRules(); err == nil {
-			fmt.Println("firewall rules added for printcap")
+		n, err := addFirewallRules()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "error (run as Administrator?):", err)
+			os.Exit(1)
 		}
+		fmt.Printf("firewall: added %d port rule(s) for printcap\n", n)
 	case "remove", "delete":
 		_ = removeFirewallRules()
 		fmt.Println("firewall rules removed")
-		return
 	default:
 		fmt.Fprintln(os.Stderr, "unknown -firewall command:", cmd, "(want add|remove)")
 		os.Exit(2)
-	}
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "error (run as Administrator?):", err)
-		os.Exit(1)
 	}
 }

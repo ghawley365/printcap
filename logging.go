@@ -215,7 +215,8 @@ func baseName(p string) string {
 	return p
 }
 
-// SetLevel changes the active level at runtime (used by the GUI).
+// SetLevel changes the active level at runtime without rebuilding the logger
+// (used by the dashboard's live log-level control).
 func (l *Logger) SetLevel(lv Level) {
 	l.mu.Lock()
 	l.level = lv

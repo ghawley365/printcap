@@ -155,9 +155,10 @@ func startResponder(svcs []service, addrs svcAddrs) *mdnsResponder {
 	r.probeAndResolve()
 
 	for _, c := range r.conns {
-		go r.serve(c)
+		c := c
+		trackGo(func() { r.serve(c) })
 	}
-	go r.announce()
+	trackGo(func() { r.announce() })
 	names := make([]string, len(r.svcs))
 	for i, s := range r.svcs {
 		names[i] = s.svcType

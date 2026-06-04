@@ -107,3 +107,14 @@ func hasPair(txt []string, k, v string) bool {
 	}
 	return false
 }
+
+// containsStr is a test-only helper (string-slice membership). The production
+// code uses contains-by-byte in pdl.go; this lives with the tests that need it.
+func containsStr(xs []string, want string) bool {
+	for _, x := range xs {
+		if x == want {
+			return true
+		}
+	}
+	return false
+}

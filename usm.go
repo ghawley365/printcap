@@ -143,10 +143,21 @@ func (p privProto) encrypt(privKey []byte, boots, time uint32, plain []byte) (ct
 }
 
 func (p privProto) decrypt(privKey []byte, boots, time uint32, salt, ct []byte) ([]byte, error) {
+	// The privacy parameters (msgPrivacyParameters / "salt") are a fixed 8 octets
+	// for both DES (RFC 3414 §8.1.1.2) and AES (RFC 3826 §3.1.2.1). A request
+	// whose salt is the wrong length is malformed; reject it as a decryption
+	// error so the caller drops the request, rather than indexing past the slice.
+	if len(salt) != 8 {
+		return nil, fmt.Errorf("snmpv3: privacy parameters must be 8 octets, got %d", len(salt))
+	}
 	switch p.kind {
 	case "des":
-		if len(ct)%8 != 0 {
-			return nil, fmt.Errorf("des ciphertext not block-aligned")
+		// DES needs an 8-byte key + 8-byte pre-IV from the localized priv key.
+		if len(privKey) < 16 {
+			return nil, fmt.Errorf("snmpv3: DES privacy key too short (%d bytes)", len(privKey))
+		}
+		if len(ct) == 0 || len(ct)%8 != 0 {
+			return nil, fmt.Errorf("snmpv3: DES ciphertext not block-aligned (%d bytes)", len(ct))
 		}
 		key := privKey[:8]
 		preIV := privKey[8:16]
@@ -162,6 +173,9 @@ func (p privProto) decrypt(privKey []byte, boots, time uint32, salt, ct []byte) 
 		cipher.NewCBCDecrypter(block, iv).CryptBlocks(pt, ct)
 		return pt, nil
 	default:
+		if len(privKey) < p.keyLen {
+			return nil, fmt.Errorf("snmpv3: AES privacy key too short (%d < %d)", len(privKey), p.keyLen)
+		}
 		key := privKey[:p.keyLen]
 		block, err := aes.NewCipher(key)
 		if err != nil {

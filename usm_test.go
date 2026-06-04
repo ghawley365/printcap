@@ -79,3 +79,24 @@ func TestPrivRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestDecryptRejectsShortPrivParamsNoPanic(t *testing.T) {
+	// A privacy request whose msgPrivacyParameters ("salt") is shorter than the
+	// mandatory 8 octets must be rejected as a decryption error, never panic
+	// (regression: DES indexed salt[0..7] unchecked).
+	des, _ := privProtocol("DES")
+	aes, _ := privProtocol("AES-128")
+	privKey := make([]byte, 32) // long enough for any algorithm
+	ct := make([]byte, 16)
+	for _, p := range []privProto{des, aes} {
+		for _, badSalt := range [][]byte{nil, {}, {1, 2, 3}, make([]byte, 7)} {
+			if _, err := p.decrypt(privKey, 1, 1, badSalt, ct); err == nil {
+				t.Fatalf("%s: short salt (len %d) must error, not succeed", p.kind, len(badSalt))
+			}
+		}
+	}
+	// A correct 8-byte salt with aligned ciphertext must NOT error on length.
+	if _, err := des.decrypt(privKey, 1, 1, make([]byte, 8), ct); err != nil {
+		t.Fatalf("valid 8-byte salt rejected: %v", err)
+	}
+}

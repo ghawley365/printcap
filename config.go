@@ -29,24 +29,50 @@ const (
 // defaultConfig(); a -config file overlays onto them; explicit flags override
 // last. Use -dump-config to write the effective config as a template to edit.
 type Config struct {
-	Bind      string      `json:"bind"`       // interface to bind all listeners to
-	Ports     Ports       `json:"ports"`      // 0 disables a given listener
-	Save      string      `json:"save"`       // both | raw | meta
-	OutDir    string      `json:"out_dir"`    // capture output directory
-	MaxJobMB  int         `json:"max_job_mb"` // per-job byte cap (0 = unlimited)
-	TLS       TLSConf     `json:"tls"`
-	Raw       RawOpts     `json:"raw"`
-	LPD       LPDOpts     `json:"lpd"`
-	IPPOpts   IPPOpts     `json:"ipp_options"`
-	Printer   Printer     `json:"printer"`
-	SNMP      SNMPConf    `json:"snmp"`
-	Dashboard DashConf    `json:"dashboard"`
-	MDNS      MDNSConf    `json:"mdns"`
-	Log       LogConf     `json:"log"`
-	Forward   ForwardConf `json:"forward"`
-	EBCDIC    EBCDICConf  `json:"ebcdic"`
-	SMB       SMBConf     `json:"smb"`
-	WSD       WSDConf     `json:"wsd"`
+	Bind          string      `json:"bind"`          // interface to bind all listeners to
+	Ports         Ports       `json:"ports"`         // 0 disables a given listener
+	Save          string      `json:"save"`          // both | raw | meta
+	OutDir        string      `json:"out_dir"`       // capture output directory
+	MaxJobMB      int         `json:"max_job_mb"`    // per-job byte cap (0 = unlimited)
+	Notifications bool        `json:"notifications"` // GUI: show a tray balloon after each capture
+	TLS           TLSConf     `json:"tls"`
+	Raw           RawOpts     `json:"raw"`
+	LPD           LPDOpts     `json:"lpd"`
+	IPPOpts       IPPOpts     `json:"ipp_options"`
+	Printer       Printer     `json:"printer"`
+	SNMP          SNMPConf    `json:"snmp"`
+	Dashboard     DashConf    `json:"dashboard"`
+	MDNS          MDNSConf    `json:"mdns"`
+	Log           LogConf     `json:"log"`
+	Forward       ForwardConf `json:"forward"`
+	EBCDIC        EBCDICConf  `json:"ebcdic"`
+	SMB           SMBConf     `json:"smb"`
+	WSD           WSDConf     `json:"wsd"`
+	Storage       StorageConf `json:"storage"`
+	DLP           DLPConf     `json:"dlp"`
+	Service       ServiceConf `json:"service"`
+}
+
+// ServiceConf configures the installed Windows service. Blank Account = the
+// default LocalSystem account.
+type ServiceConf struct {
+	Account  string `json:"account"`  // e.g. ".\\svc_printcap" or "DOMAIN\\user"; blank = LocalSystem
+	Password string `json:"password"` // password for Account (if required)
+}
+
+// DLPConf scans captured documents for sensitive content and raises an alert
+// (logged + tagged on the job). Inspection only — it never blocks capture.
+type DLPConf struct {
+	Enabled bool      `json:"enabled"`
+	Rules   []DLPRule `json:"rules"`
+}
+
+// DLPRule matches captured content. Mode: "keyword" (case-insensitive substring)
+// or "regex" (RE2). Name labels the match on the job and in the alert log.
+type DLPRule struct {
+	Name    string `json:"name"`
+	Mode    string `json:"mode"` // keyword | regex
+	Pattern string `json:"pattern"`
 }
 
 // EBCDICConf controls decoding of EBCDIC (mainframe) print streams into a
@@ -230,6 +256,13 @@ type WSDConf struct {
 	Discovery bool `json:"discovery"` // run the WS-Discovery multicast responder
 }
 
+// StorageConf configures where printcap writes generated files. Relative paths
+// resolve relative to the executable's directory so the app is portable; absolute
+// paths are used as-is. Nothing here is ever auto-deleted at shutdown.
+type StorageConf struct {
+	SpoolDir string `json:"spool_dir"` // forward retry queue + temp working files; blank = "<exe-dir>/spool"
+}
+
 // SMBUser is a credential the SMB share accepts (NTLMv2).
 type SMBUser struct {
 	User     string `json:"user"`
@@ -275,9 +308,10 @@ func defaultConfig() *Config {
 			Dashboard: 8631,
 			SNMP:      161,
 		},
-		Save:     "both",
-		OutDir:   "captures",
-		MaxJobMB: 0,
+		Save:          "both",
+		OutDir:        "captures",
+		MaxJobMB:      0,
+		Notifications: true,
 		Raw: RawOpts{
 			ExtraPorts: []int{},
 			ParsePJL:   true,
@@ -354,6 +388,12 @@ func defaultConfig() *Config {
 			Enabled:   false,
 			Port:      3911,
 			Discovery: true,
+		},
+		Storage: StorageConf{SpoolDir: ""}, // empty = <exe-dir>/spool
+		Service: ServiceConf{},
+		DLP: DLPConf{
+			Enabled: false,
+			Rules:   []DLPRule{},
 		},
 		Forward: ForwardConf{
 			Enabled: false,

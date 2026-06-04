@@ -1,14 +1,42 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
-	"os"
+	"strings"
 	"sync"
+	"time"
 )
+
+// handlerWG tracks every goroutine the engine spawns (accept loops, per-
+// connection handlers, UDP/responder loops) so Stop() can wait for them all to
+// finish before returning — making restart race-free.
+var handlerWG sync.WaitGroup
+
+// trackGo runs f in a tracked goroutine. Stop() blocks until every tracked
+// goroutine has returned.
+func trackGo(f func()) {
+	handlerWG.Add(1)
+	go func() {
+		defer handlerWG.Done()
+		f()
+	}()
+}
+
+// httpCloser shuts an http.Server gracefully (drain in-flight handlers up to a
+// timeout) then force-closes, so Stop() leaves no handler goroutine running.
+type httpCloser struct{ srv *http.Server }
+
+func (h httpCloser) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = h.srv.Shutdown(ctx)
+	return h.srv.Close()
+}
 
 // Engine owns every listener and lets callers Start and Stop the whole capture
 // service in-process. The console front-end, the Windows service, and the GUI
@@ -22,6 +50,72 @@ type Engine struct {
 }
 
 var engine = &Engine{}
+
+// Runtime per-listener enable/disable overrides. Disabling a listener keeps its
+// config intact but skips binding it on the next Start(); the dashboard toggles
+// these and bounces the engine so the change takes effect.
+var (
+	listenerMu       sync.Mutex
+	disabledListener = map[string]bool{} // listener name -> disabled
+)
+
+func listenerDisabled(name string) bool {
+	listenerMu.Lock()
+	defer listenerMu.Unlock()
+	return disabledListener[name]
+}
+
+func setListenerDisabled(name string, off bool) {
+	listenerMu.Lock()
+	defer listenerMu.Unlock()
+	disabledListener[name] = off
+}
+
+// listenerStatus is the runtime view of one configured listener for the API.
+type listenerStatus struct {
+	Name     string `json:"name"`
+	Port     int    `json:"port"`
+	Up       bool   `json:"up"`       // currently bound/active this run
+	Disabled bool   `json:"disabled"` // turned off via the runtime override
+}
+
+// listenerStatuses returns the configured listeners with their current state.
+// Up is derived from the engine's active listener descriptions ("IPP:631"), so
+// a listener counts as up only if it actually bound this run.
+func listenerStatuses() []listenerStatus {
+	active := map[string]bool{} // listener name (prefix before ':') -> up
+	for _, a := range engine.Active() {
+		name := a
+		if i := strings.LastIndex(a, ":"); i >= 0 {
+			name = a[:i]
+		}
+		active[name] = true
+	}
+	defs := []struct {
+		name string
+		port int
+	}{
+		{"9100", cfg.Ports.Raw9100},
+		{"LPR", cfg.Ports.LPR},
+		{"IPP", cfg.Ports.IPP},
+		{"IPPS", cfg.Ports.IPPS},
+		{"dashboard", cfg.Ports.Dashboard},
+		{"SNMP", snmpPortIfEnabled()},
+		{"SMB", cfg.SMB.Port},
+		{"WSD", cfg.WSD.Port},
+		{"mDNS", 0},
+	}
+	out := make([]listenerStatus, 0, len(defs))
+	for _, d := range defs {
+		out = append(out, listenerStatus{
+			Name:     d.name,
+			Port:     d.port,
+			Up:       active[d.name],
+			Disabled: listenerDisabled(d.name),
+		})
+	}
+	return out
+}
 
 // engineLog, when set (by the GUI), receives listener start/stop diagnostics in
 // addition to the standard logger.
@@ -37,12 +131,14 @@ func (e *Engine) Start() (int, error) {
 	if e.running {
 		return len(e.active), nil
 	}
-	if err := os.MkdirAll(cfg.OutDir, 0o755); err != nil {
+	if err := ensureStorageDirs(); err != nil {
 		return 0, err
 	}
 	// (Re)initialize the capture sink and dashboard store for this run.
-	sink = &captureSink{dir: cfg.OutDir}
+	sink = &captureSink{dir: captureDir()}
 	store = newJobStore(200)
+
+	rebuildDLP()
 
 	if cfg.Forward.Enabled {
 		if fw, err := newForwarder(cfg.Forward); err != nil {
@@ -83,7 +179,7 @@ func (e *Engine) Start() (int, error) {
 		e.closers = append(e.closers, ln)
 		e.active = append(e.active, name+":"+itoa(port))
 		logInfo("engine", "listening %s on %s", name, bindAddr(port))
-		go serve(ln)
+		trackGo(func() { serve(ln) })
 		return true
 	}
 
@@ -100,15 +196,15 @@ func (e *Engine) Start() (int, error) {
 		if tlsCfg != nil {
 			ln = tls.NewListener(ln, tlsCfg)
 		}
-		e.closers = append(e.closers, srv)
+		e.closers = append(e.closers, httpCloser{srv})
 		e.active = append(e.active, name+":"+itoa(port))
 		logInfo("engine", "listening %s on %s%s", name, bindAddr(port), tlsLabel(tlsCfg))
-		go srv.Serve(ln)
+		trackGo(func() { srv.Serve(ln) })
 		return true
 	}
 
 	// Auto-TLS single port (serves both IPP and IPPS).
-	if ports.AutoTLS > 0 {
+	if ports.AutoTLS > 0 && !listenerDisabled("IPP") && !listenerDisabled("IPPS") {
 		if tlsCfg, err := tlsConfig(); err != nil {
 			e.logf("IPP/IPPS: %v", err)
 		} else if ln, err := net.Listen("tcp", bindAddr(ports.AutoTLS)); err != nil {
@@ -116,24 +212,30 @@ func (e *Engine) Start() (int, error) {
 		} else {
 			e.closers = append(e.closers, ln)
 			e.active = append(e.active, "IPP/IPPS:"+itoa(ports.AutoTLS))
-			go serveAutoTLS(ln, tlsCfg)
+			trackGo(func() { serveAutoTLS(ln, tlsCfg) })
 			bl.IPP, bl.IPPS = ports.AutoTLS, ports.AutoTLS
 		}
 	}
 
-	if addTCP("9100", ports.Raw9100, serveRaw9100) {
-		bl.Raw9100 = ports.Raw9100
+	if !listenerDisabled("9100") {
+		if addTCP("9100", ports.Raw9100, serveRaw9100) {
+			bl.Raw9100 = ports.Raw9100
+		}
+		for _, ep := range cfg.Raw.ExtraPorts {
+			addTCP("9100", ep, serveRaw9100) // multi-port raw servers (9101, 9102, …)
+		}
 	}
-	for _, ep := range cfg.Raw.ExtraPorts {
-		addTCP("9100", ep, serveRaw9100) // multi-port raw servers (9101, 9102, …)
+	if !listenerDisabled("LPR") {
+		if addTCP("LPR", ports.LPR, serveLPD) {
+			bl.LPR = ports.LPR
+		}
 	}
-	if addTCP("LPR", ports.LPR, serveLPD) {
-		bl.LPR = ports.LPR
+	if !listenerDisabled("IPP") {
+		if addHTTP("IPP", ports.IPP, nil, http.HandlerFunc(ippHandler)) {
+			bl.IPP = ports.IPP
+		}
 	}
-	if addHTTP("IPP", ports.IPP, nil, http.HandlerFunc(ippHandler)) {
-		bl.IPP = ports.IPP
-	}
-	if ports.IPPS > 0 {
+	if ports.IPPS > 0 && !listenerDisabled("IPPS") {
 		if tlsCfg, err := tlsConfig(); err != nil {
 			e.logf("IPPS: %v", err)
 		} else {
@@ -143,34 +245,34 @@ func (e *Engine) Start() (int, error) {
 		}
 	}
 
-	if cfg.SNMP.Enabled && ports.SNMP > 0 {
+	if cfg.SNMP.Enabled && ports.SNMP > 0 && !listenerDisabled("SNMP") {
 		if pc, err := net.ListenPacket("udp", bindAddr(ports.SNMP)); err != nil {
 			e.logf("SNMP: %v", err)
 		} else {
 			buildMIB()
 			e.closers = append(e.closers, pc)
 			e.active = append(e.active, "SNMP:"+itoa(ports.SNMP))
-			go serveSNMP(pc)
+			trackGo(func() { serveSNMP(pc) })
 		}
 	}
 
-	if cfg.Dashboard.Enabled && ports.Dashboard > 0 {
+	if cfg.Dashboard.Enabled && ports.Dashboard > 0 && !listenerDisabled("dashboard") {
 		if addHTTP("dashboard", ports.Dashboard, nil, dashboardHandler()) {
 			bl.Dash = ports.Dashboard
 		}
 	}
 
-	if cfg.SMB.Enabled {
+	if cfg.SMB.Enabled && !listenerDisabled("SMB") {
 		addTCP("SMB", cfg.SMB.Port, serveSMB)
 	}
 
-	if cfg.WSD.Enabled {
+	if cfg.WSD.Enabled && !listenerDisabled("WSD") {
 		if w := startWSD(); w != nil {
 			e.closers = append(e.closers, w)
 		}
 	}
 
-	if cfg.MDNS.Enabled {
+	if cfg.MDNS.Enabled && !listenerDisabled("mDNS") {
 		host := resolveHost()
 		v4, v6 := localAddrs(cfg.Bind)
 		svcs := buildServices(bl, cfg.MDNS.AirPrint, resolveInstance())
@@ -204,20 +306,27 @@ func join(xs []string, sep string) string {
 	return out
 }
 
-// Stop closes every listener; the accept-loop goroutines then unwind on their
-// own as Accept/ReadFrom return errors.
+// Stop closes every listener and then waits for every tracked goroutine (accept
+// loops, per-connection handlers, UDP/responder loops, HTTP handlers) to finish
+// before returning, so a restart is race-free: once Stop() returns, nothing
+// reads cfg/sink/store/forward.
 func (e *Engine) Stop() {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	if !e.running {
+		e.mu.Unlock()
 		return
 	}
 	for _, c := range e.closers {
-		_ = c.Close()
+		_ = c.Close() // stops accept loops; Shutdown drains HTTP handlers
 	}
 	e.closers = nil
 	e.active = nil
 	e.running = false
+	e.mu.Unlock()
+	// Wait OUTSIDE the lock for every tracked goroutine to finish, so that when
+	// Stop() returns nothing reads cfg/sink/store/forward. In-flight per-conn
+	// handlers unwind via their idle read deadlines (limits.go idleReadTimeout).
+	handlerWG.Wait()
 	logInfo("engine", "stopped (all listeners closed)")
 }
 

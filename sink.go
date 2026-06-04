@@ -98,6 +98,10 @@ func (s *captureSink) save(j *job) error {
 		fwdErr = forward.forward(j, original)
 	}
 
+	// dlpDecoded captures the EBCDIC-decoded text (if any) for DLP scanning
+	// below. It stays "" when EBCDIC decode didn't run or failed.
+	var dlpDecoded string
+
 	if page, carriage, on := resolveEBCDIC(j, j.data); on {
 		// Machine (FCFC) carriage-control is raw EBCDIC control bytes that decode
 		// would map away, so it MUST run on the raw bytes BEFORE decode. ASA/none/
@@ -110,6 +114,7 @@ func (s *captureSink) save(j *job) error {
 			if carriage != "machine" {
 				decoded = applyCarriageControl(decoded, carriage)
 			}
+			dlpDecoded = decoded // make available to DLP scan
 			j.CodePage = page
 			if cfg.EBCDIC.DecodedSidecar && cfg.mode() != saveMeta {
 				name := base + "-decoded.txt"
@@ -125,6 +130,13 @@ func (s *captureSink) save(j *job) error {
 		}
 	}
 
+	if cfg.DLP.Enabled {
+		if matches := scanDLP(j.data, dlpDecoded); len(matches) > 0 {
+			j.DLPMatches = matches
+			logWarn("DLP", "job %q from %s matched rule(s): %s", j.JobName, j.Source, strings.Join(matches, ", "))
+		}
+	}
+
 	if mode != saveRaw {
 		b, _ := json.MarshalIndent(j, "", "  ")
 		if err := os.WriteFile(filepath.Join(s.dir, base+".json"), b, 0o600); err != nil {
@@ -133,6 +145,7 @@ func (s *captureSink) save(j *job) error {
 	}
 
 	store.add(j)
+	notifyCapture(j) // fire the front-end capture hook (GUI tray balloon), if any
 	logInfo(j.Protocol, "captured %d bytes from %s user=%s job=%q queue=%s pdl=%s -> %s",
 		j.Bytes, j.Source, orQ(j.User), j.JobName, orQ(j.Queue), orQ(j.PDL), orElse(j.SavedAs, "(meta only)"))
 	return fwdErr

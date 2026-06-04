@@ -3,6 +3,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -75,6 +76,53 @@ var (
 	uiSyslogAddr, uiSyslogApp        *walk.LineEdit
 	uiSyslogFacility                 *walk.NumberEdit
 
+	// Storage
+	uiSpoolDir *walk.LineEdit
+
+	// Dashboard
+	uiDashEnabled *walk.CheckBox
+
+	// General — capture notifications (cfg.Notifications)
+	uiNotifications *walk.CheckBox
+
+	// Service — start the tray GUI at login (registry-backed, not a cfg field)
+	uiRunAtLogin *walk.CheckBox
+
+	// Printer (extended)
+	uiInfo, uiDocFormats, uiDefaultFormat *walk.LineEdit
+	uiSides, uiResolutions, uiMedia       *walk.LineEdit
+
+	// SNMPv3 / USM
+	uiSnmpV3, uiSnmpAllowV12 *walk.CheckBox
+	uiEngineID               *walk.LineEdit
+	uiSnmpUsers              *walk.TextEdit
+
+	// Discovery — mDNS + WSD
+	uiMdnsEnabled, uiMdnsAirPrint  *walk.CheckBox
+	uiMdnsInstance, uiMdnsHostname *walk.LineEdit
+	uiWsdEnabled, uiWsdDiscovery   *walk.CheckBox
+	uiWsdPort                      *walk.NumberEdit
+
+	// SMB
+	uiSmbEnabled, uiSmbRequireAuth, uiSmbSign, uiSmbEncrypt *walk.CheckBox
+	uiSmbPort                                               *walk.NumberEdit
+	uiSmbShare                                              *walk.LineEdit
+	uiSmbUsers                                              *walk.TextEdit
+
+	// Mainframe / EBCDIC
+	uiEbcdicEnabled, uiEbcdicAuto, uiEbcdicSidecar *walk.CheckBox
+	uiEbcdicCodePage, uiEbcdicCarriage             *walk.ComboBox
+	uiLpdQueueDefaults                             *walk.TextEdit
+
+	// Forward proxy
+	uiFwdEnabled              *walk.CheckBox
+	uiFwdCapture              *walk.ComboBox
+	uiFwdMacros, uiFwdTargets *walk.TextEdit
+
+	// Content / DLP
+	uiDlpEnabled *walk.CheckBox
+	uiDlpRules   *walk.TextEdit
+
 	helpWin *walk.MainWindow
 )
 
@@ -82,6 +130,19 @@ var saveModes = []string{"both", "raw", "meta"}
 var logLevels = []string{"error", "warn", "info", "debug", "trace"}
 var logFormats = []string{"text", "json"}
 var syslogNets = []string{"udp", "tcp"}
+var ebcdicCodePages = []string{"CP037", "CP500", "CP1047", "CP273", "CP285", "CP297"}
+var carriageModes = []string{"none", "asa", "machine", "auto"}
+var captureModes = []string{"both", "sent", "orig"}
+
+// jsonBlock pretty-prints v as indented JSON for an in-GUI editor. On error it
+// returns the empty string (the editor will simply start blank).
+func jsonBlock(v interface{}) string {
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
 
 func runGUI() {
 	if err := buildWindow(); err != nil {
@@ -95,7 +156,7 @@ func runGUI() {
 	// System tray icon + menu.
 	notifyIcon, _ = walk.NewNotifyIcon(mw)
 	if notifyIcon != nil {
-		if icon, err := walk.NewIconFromSysDLL("imageres", 109); err == nil {
+		if icon := loadAppIcon(); icon != nil {
 			notifyIcon.SetIcon(icon)
 			mw.SetIcon(icon)
 		}
@@ -111,6 +172,20 @@ func runGUI() {
 		addTrayAction("Open Capture Folder", openFolder)
 		notifyIcon.ContextMenu().Actions().Add(walk.NewSeparatorAction())
 		addTrayAction("Exit", func() { reallyExit = true; mw.Close() })
+
+		// Show a tray balloon after each capture (gated by cfg.Notifications via
+		// notifyCapture). Marshalled onto the GUI thread; guarded against a nil
+		// icon in case it was disposed.
+		onCapture = func(j *job) {
+			title := "printcap — job captured"
+			body := fmt.Sprintf("%s · %s · %d bytes",
+				j.Protocol, firstNonEmpty(j.JobName, j.Source), j.Bytes)
+			mw.Synchronize(func() {
+				if notifyIcon != nil {
+					_ = notifyIcon.ShowMessage(title, body)
+				}
+			})
+		}
 	}
 
 	// Minimize/close to tray instead of exiting.
@@ -134,6 +209,21 @@ func runGUI() {
 	if notifyIcon != nil {
 		notifyIcon.Dispose()
 	}
+}
+
+// loadAppIcon returns the application/tray icon. It first tries the icon
+// embedded in the exe by goversioninfo (resource ID 2 — the first icon group
+// goversioninfo writes when versioninfo.json sets IconPath). If no .ico was
+// embedded, it falls back to a generic printer glyph from imageres.dll so the
+// tray always has an icon. Returns nil only if both sources fail.
+func loadAppIcon() *walk.Icon {
+	if icon, err := walk.NewIconFromResourceId(2); err == nil && icon != nil {
+		return icon
+	}
+	if icon, err := walk.NewIconFromSysDLL("imageres", 109); err == nil {
+		return icon
+	}
+	return nil
 }
 
 func buildWindow() error {
@@ -164,6 +254,11 @@ func buildWindow() error {
 					ippTlsTab(),
 					printerTab(),
 					snmpTab(),
+					discoveryTab(),
+					smbTab(),
+					ebcdicTab(),
+					forwardTab(),
+					dlpTab(),
 					loggingTab(),
 					serviceTab(),
 				},
@@ -190,6 +285,10 @@ func generalTab() dec.TabPage {
 			dec.LineEdit{AssignTo: &uiOut},
 			dec.PushButton{Text: "Browse…", OnClicked: onBrowse},
 
+			dec.Label{Text: "Spool/retry folder (blank = <exe>/spool):"},
+			dec.LineEdit{AssignTo: &uiSpoolDir},
+			dec.HSpacer{},
+
 			dec.Label{Text: "Save mode:"},
 			dec.ComboBox{AssignTo: &uiSave, Model: saveModes},
 			dec.HSpacer{},
@@ -201,6 +300,14 @@ func generalTab() dec.TabPage {
 			dec.Label{Text: "Bind address:"},
 			dec.LineEdit{AssignTo: &uiBind},
 			dec.Label{Text: "(0.0.0.0 = all interfaces; 127.0.0.1 = local only)"},
+
+			dec.Label{Text: ""},
+			dec.CheckBox{AssignTo: &uiDashEnabled, Text: "Enable web dashboard"},
+			dec.HSpacer{},
+
+			dec.Label{Text: ""},
+			dec.CheckBox{AssignTo: &uiNotifications, Text: "Show a tray notification after each captured job"},
+			dec.HSpacer{},
 		},
 	}
 }
@@ -307,9 +414,15 @@ func printerTab() dec.TabPage {
 		Layout: dec.Grid{Columns: 2},
 		Children: []dec.Widget{
 			dec.Label{Text: "Name:"}, dec.LineEdit{AssignTo: &uiName},
+			dec.Label{Text: "Info / description:"}, dec.LineEdit{AssignTo: &uiInfo},
 			dec.Label{Text: "Make and model:"}, dec.LineEdit{AssignTo: &uiModel},
 			dec.Label{Text: "Location:"}, dec.LineEdit{AssignTo: &uiLoc},
 			dec.Label{Text: "Serial number:"}, dec.LineEdit{AssignTo: &uiSerial},
+			dec.Label{Text: "Document formats (CSV MIME types):"}, dec.LineEdit{AssignTo: &uiDocFormats},
+			dec.Label{Text: "Default format:"}, dec.LineEdit{AssignTo: &uiDefaultFormat},
+			dec.Label{Text: "Sides (CSV, e.g. one-sided,two-sided-long-edge):"}, dec.LineEdit{AssignTo: &uiSides},
+			dec.Label{Text: "Resolutions (CSV dpi, e.g. 300,600):"}, dec.LineEdit{AssignTo: &uiResolutions},
+			dec.Label{Text: "Media (CSV, e.g. iso_a4_210x297mm):"}, dec.LineEdit{AssignTo: &uiMedia},
 			dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiColor, Text: "Advertise color support"},
 			dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiEnforce, Text: "Reject IPP jobs with unsupported document formats"},
 		},
@@ -319,17 +432,175 @@ func printerTab() dec.TabPage {
 func snmpTab() dec.TabPage {
 	return dec.TabPage{
 		Title:  "SNMP",
-		Layout: dec.Grid{Columns: 2},
+		Layout: dec.VBox{},
 		Children: []dec.Widget{
-			dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiSnmpEnabled, Text: "Enable SNMP discovery agent"},
-			dec.Label{Text: "Community string:"}, dec.LineEdit{AssignTo: &uiCommunity},
-			dec.Label{Text: "System description:"}, dec.LineEdit{AssignTo: &uiSysDescr},
-			dec.Label{Text: "System name:"}, dec.LineEdit{AssignTo: &uiSysName},
-			dec.Label{Text: "System location:"}, dec.LineEdit{AssignTo: &uiSysLoc},
-			dec.Label{Text: "System contact:"}, dec.LineEdit{AssignTo: &uiSysContact},
-			dec.Label{Text: "sysObjectID (vendor OID):"}, dec.LineEdit{AssignTo: &uiSysObj},
-			dec.Label{Text: "Reported page count:"}, dec.NumberEdit{AssignTo: &uiPageCount, MinValue: 0, MaxValue: 1e9, Decimals: 0},
-			dec.Label{Text: "Reported toner level (%):"}, dec.NumberEdit{AssignTo: &uiToner, MinValue: 0, MaxValue: 100, Decimals: 0},
+			dec.GroupBox{
+				Title:  "Agent identity (v1/v2c)",
+				Layout: dec.Grid{Columns: 2},
+				Children: []dec.Widget{
+					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiSnmpEnabled, Text: "Enable SNMP discovery agent"},
+					dec.Label{Text: "Community string:"}, dec.LineEdit{AssignTo: &uiCommunity},
+					dec.Label{Text: "System description:"}, dec.LineEdit{AssignTo: &uiSysDescr},
+					dec.Label{Text: "System name:"}, dec.LineEdit{AssignTo: &uiSysName},
+					dec.Label{Text: "System location:"}, dec.LineEdit{AssignTo: &uiSysLoc},
+					dec.Label{Text: "System contact:"}, dec.LineEdit{AssignTo: &uiSysContact},
+					dec.Label{Text: "sysObjectID (vendor OID):"}, dec.LineEdit{AssignTo: &uiSysObj},
+					dec.Label{Text: "Reported page count:"}, dec.NumberEdit{AssignTo: &uiPageCount, MinValue: 0, MaxValue: 1e9, Decimals: 0},
+					dec.Label{Text: "Reported toner level (%):"}, dec.NumberEdit{AssignTo: &uiToner, MinValue: 0, MaxValue: 100, Decimals: 0},
+				},
+			},
+			dec.GroupBox{
+				Title:  "SNMPv3 (USM)",
+				Layout: dec.Grid{Columns: 2},
+				Children: []dec.Widget{
+					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiSnmpV3, Text: "Enable SNMPv3 (USM)"},
+					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiSnmpAllowV12, Text: "Also allow v1/v2c"},
+					dec.Label{Text: "Engine ID (hex, blank=auto):"}, dec.LineEdit{AssignTo: &uiEngineID},
+					dec.Label{Text: "USM users (JSON array):"},
+					dec.Label{Text: "fields: user/level/auth_protocol/auth_pass/priv_protocol/priv_pass"},
+					dec.TextEdit{AssignTo: &uiSnmpUsers, VScroll: true, ColumnSpan: 2, MinSize: dec.Size{Height: 120}},
+				},
+			},
+			dec.VSpacer{},
+		},
+	}
+}
+
+func discoveryTab() dec.TabPage {
+	return dec.TabPage{
+		Title:  "Discovery",
+		Layout: dec.VBox{},
+		Children: []dec.Widget{
+			dec.GroupBox{
+				Title:  "mDNS / DNS-SD (Bonjour / AirPrint)",
+				Layout: dec.Grid{Columns: 2},
+				Children: []dec.Widget{
+					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiMdnsEnabled, Text: "Enable mDNS responder"},
+					dec.Label{Text: "Instance name (blank = printer name):"}, dec.LineEdit{AssignTo: &uiMdnsInstance},
+					dec.Label{Text: "Hostname (blank = sanitized name):"}, dec.LineEdit{AssignTo: &uiMdnsHostname},
+					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiMdnsAirPrint, Text: "Advertise AirPrint"},
+				},
+			},
+			dec.GroupBox{
+				Title:  "WSD (Web Services for Devices) — experimental",
+				Layout: dec.Grid{Columns: 2},
+				Children: []dec.Widget{
+					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiWsdEnabled, Text: "Enable WSD print service"},
+					dec.Label{Text: "WSD port:"}, dec.NumberEdit{AssignTo: &uiWsdPort, MinValue: 0, MaxValue: 65535, Decimals: 0},
+					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiWsdDiscovery, Text: "Run WS-Discovery multicast responder"},
+				},
+			},
+			dec.VSpacer{},
+		},
+	}
+}
+
+func smbTab() dec.TabPage {
+	return dec.TabPage{
+		Title:  "SMB Share",
+		Layout: dec.VBox{},
+		Children: []dec.Widget{
+			dec.GroupBox{
+				Title:  "Experimental SMB2/3 print share",
+				Layout: dec.Grid{Columns: 2},
+				Children: []dec.Widget{
+					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiSmbEnabled, Text: "Enable experimental SMB print share"},
+					dec.Label{Text: "Port:"}, dec.NumberEdit{AssignTo: &uiSmbPort, MinValue: 0, MaxValue: 65535, Decimals: 0},
+					dec.Label{Text: "Share name:"}, dec.LineEdit{AssignTo: &uiSmbShare},
+					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiSmbRequireAuth, Text: "Require authentication"},
+					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiSmbSign, Text: "Sign"},
+					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiSmbEncrypt, Text: "Encrypt"},
+					dec.Label{Text: "Users (JSON array of user/password/domain):"},
+					dec.Label{Text: "SMB capture is experimental."},
+					dec.TextEdit{AssignTo: &uiSmbUsers, VScroll: true, ColumnSpan: 2, MinSize: dec.Size{Height: 120}},
+				},
+			},
+			dec.VSpacer{},
+		},
+	}
+}
+
+func ebcdicTab() dec.TabPage {
+	return dec.TabPage{
+		Title:  "Mainframe / EBCDIC",
+		Layout: dec.VBox{},
+		Children: []dec.Widget{
+			dec.GroupBox{
+				Title:  "EBCDIC decoding",
+				Layout: dec.Grid{Columns: 2},
+				Children: []dec.Widget{
+					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiEbcdicEnabled, Text: "Enable EBCDIC decoding"},
+					dec.Label{Text: "Default code page:"}, dec.ComboBox{AssignTo: &uiEbcdicCodePage, Model: ebcdicCodePages},
+					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiEbcdicAuto, Text: "Auto-detect EBCDIC streams"},
+					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiEbcdicSidecar, Text: "Write decoded sidecar"},
+					dec.Label{Text: "Carriage control:"}, dec.ComboBox{AssignTo: &uiEbcdicCarriage, Model: carriageModes},
+				},
+			},
+			dec.GroupBox{
+				Title:  "LPD per-queue defaults (JSON object: queue-glob → {code_page, carriage_control, ebcdic})",
+				Layout: dec.VBox{},
+				Children: []dec.Widget{
+					dec.TextEdit{AssignTo: &uiLpdQueueDefaults, VScroll: true, MinSize: dec.Size{Height: 140}},
+				},
+			},
+			dec.VSpacer{},
+		},
+	}
+}
+
+func forwardTab() dec.TabPage {
+	return dec.TabPage{
+		Title:  "Forward Proxy",
+		Layout: dec.VBox{},
+		Children: []dec.Widget{
+			dec.GroupBox{
+				Title:  "Forwarding",
+				Layout: dec.Grid{Columns: 2},
+				Children: []dec.Widget{
+					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiFwdEnabled, Text: "Enable forwarding"},
+					dec.Label{Text: "Capture mode:"}, dec.ComboBox{AssignTo: &uiFwdCapture, Model: captureModes},
+				},
+			},
+			dec.GroupBox{
+				Title:  "Macros (JSON object: name → value)",
+				Layout: dec.VBox{},
+				Children: []dec.Widget{
+					dec.TextEdit{AssignTo: &uiFwdMacros, VScroll: true, MinSize: dec.Size{Height: 80}},
+				},
+			},
+			dec.GroupBox{
+				Title:  "Targets (JSON array)",
+				Layout: dec.VBox{},
+				Children: []dec.Widget{
+					dec.Label{Text: "Each target is edited as JSON (transport, address, when, transforms, retry, failure)."},
+					dec.TextEdit{AssignTo: &uiFwdTargets, VScroll: true, MinSize: dec.Size{Height: 180}},
+				},
+			},
+			dec.VSpacer{},
+		},
+	}
+}
+
+func dlpTab() dec.TabPage {
+	return dec.TabPage{
+		Title:  "Content / DLP",
+		Layout: dec.VBox{},
+		Children: []dec.Widget{
+			dec.GroupBox{
+				Title:  "Content inspection",
+				Layout: dec.Grid{Columns: 2},
+				Children: []dec.Widget{
+					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiDlpEnabled, Text: "Enable content inspection (DLP)"},
+				},
+			},
+			dec.GroupBox{
+				Title:  "Rules (JSON array of name/mode/pattern; mode = keyword|regex)",
+				Layout: dec.VBox{},
+				Children: []dec.Widget{
+					dec.TextEdit{AssignTo: &uiDlpRules, VScroll: true, MinSize: dec.Size{Height: 180}},
+				},
+			},
+			dec.VSpacer{},
 		},
 	}
 }
@@ -446,6 +717,10 @@ func serviceTab() dec.TabPage {
 							dec.HSpacer{},
 						},
 					},
+					dec.CheckBox{
+						AssignTo: &uiRunAtLogin,
+						Text:     "Start printcap automatically when I log in",
+					},
 				},
 			},
 			dec.GroupBox{
@@ -472,9 +747,13 @@ func serviceTab() dec.TabPage {
 
 func refreshUIFromConfig() {
 	uiOut.SetText(cfg.OutDir)
+	uiSpoolDir.SetText(cfg.Storage.SpoolDir)
 	uiSave.SetCurrentIndex(saveIndex(cfg.Save))
 	uiMaxJob.SetValue(float64(cfg.MaxJobMB))
 	uiBind.SetText(cfg.Bind)
+	uiDashEnabled.SetChecked(cfg.Dashboard.Enabled)
+	uiNotifications.SetChecked(cfg.Notifications)
+	uiRunAtLogin.SetChecked(runAtLogin()) // system state, not a cfg field
 
 	setRow(rowRaw, cfg.Ports.Raw9100)
 	setRow(rowLPR, cfg.Ports.LPR)
@@ -485,9 +764,15 @@ func refreshUIFromConfig() {
 	setRow(rowDash, cfg.Ports.Dashboard)
 
 	uiName.SetText(cfg.Printer.Name)
+	uiInfo.SetText(cfg.Printer.Info)
 	uiModel.SetText(cfg.Printer.MakeAndModel)
 	uiLoc.SetText(cfg.Printer.Location)
 	uiSerial.SetText(cfg.Printer.Serial)
+	uiDocFormats.SetText(strings.Join(cfg.Printer.DocumentFormats, ", "))
+	uiDefaultFormat.SetText(cfg.Printer.DefaultFormat)
+	uiSides.SetText(strings.Join(cfg.Printer.Sides, ", "))
+	uiResolutions.SetText(joinIntList(cfg.Printer.Resolutions))
+	uiMedia.SetText(strings.Join(cfg.Printer.Media, ", "))
 	uiColor.SetChecked(cfg.Printer.Color)
 	uiEnforce.SetChecked(cfg.Printer.EnforceFormats)
 
@@ -500,6 +785,41 @@ func refreshUIFromConfig() {
 	uiSysObj.SetText(cfg.SNMP.SysObjectID)
 	uiPageCount.SetValue(float64(cfg.SNMP.PageCount))
 	uiToner.SetValue(float64(cfg.SNMP.TonerLevelPct))
+	uiSnmpV3.SetChecked(cfg.SNMP.V3Enabled)
+	uiSnmpAllowV12.SetChecked(cfg.SNMP.AllowV1V2c)
+	uiEngineID.SetText(cfg.SNMP.EngineID)
+	uiSnmpUsers.SetText(jsonBlock(cfg.SNMP.Users))
+
+	uiMdnsEnabled.SetChecked(cfg.MDNS.Enabled)
+	uiMdnsInstance.SetText(cfg.MDNS.Instance)
+	uiMdnsHostname.SetText(cfg.MDNS.Hostname)
+	uiMdnsAirPrint.SetChecked(cfg.MDNS.AirPrint)
+	uiWsdEnabled.SetChecked(cfg.WSD.Enabled)
+	uiWsdPort.SetValue(float64(cfg.WSD.Port))
+	uiWsdDiscovery.SetChecked(cfg.WSD.Discovery)
+
+	uiSmbEnabled.SetChecked(cfg.SMB.Enabled)
+	uiSmbPort.SetValue(float64(cfg.SMB.Port))
+	uiSmbShare.SetText(cfg.SMB.ShareName)
+	uiSmbRequireAuth.SetChecked(cfg.SMB.RequireAuth)
+	uiSmbSign.SetChecked(cfg.SMB.Sign)
+	uiSmbEncrypt.SetChecked(cfg.SMB.Encrypt)
+	uiSmbUsers.SetText(jsonBlock(cfg.SMB.Users))
+
+	uiEbcdicEnabled.SetChecked(cfg.EBCDIC.Enabled)
+	uiEbcdicCodePage.SetCurrentIndex(indexOf(ebcdicCodePages, cfg.EBCDIC.DefaultCodePage, 0))
+	uiEbcdicAuto.SetChecked(cfg.EBCDIC.AutoDetect)
+	uiEbcdicSidecar.SetChecked(cfg.EBCDIC.DecodedSidecar)
+	uiEbcdicCarriage.SetCurrentIndex(indexOf(carriageModes, cfg.EBCDIC.CarriageControl, 3))
+	uiLpdQueueDefaults.SetText(jsonBlock(cfg.LPD.QueueDefaults))
+
+	uiFwdEnabled.SetChecked(cfg.Forward.Enabled)
+	uiFwdCapture.SetCurrentIndex(indexOf(captureModes, cfg.Forward.Capture, 0))
+	uiFwdMacros.SetText(jsonBlock(cfg.Forward.Macros))
+	uiFwdTargets.SetText(jsonBlock(cfg.Forward.Targets))
+
+	uiDlpEnabled.SetChecked(cfg.DLP.Enabled)
+	uiDlpRules.SetText(jsonBlock(cfg.DLP.Rules))
 
 	uiRawParsePJL.SetChecked(cfg.Raw.ParsePJL)
 	uiRawSplitUEL.SetChecked(cfg.Raw.SplitOnUEL)
@@ -531,11 +851,32 @@ func refreshUIFromConfig() {
 	uiSyslogRFC5424.SetChecked(cfg.Log.Syslog.RFC5424)
 }
 
-func applyUIToConfig() {
+// applyUIToConfig pulls every widget back into the live cfg. Nested list/map
+// sub-blocks are edited as JSON; any that fail to parse are left at their
+// previous value and reported back to the caller as a list of errors.
+func applyUIToConfig() []string {
+	var jsonErrs []string
+	// applyJSON unmarshals the editor text into dst. On error the previous
+	// value (already in dst) is kept and the failure is recorded.
+	applyJSON := func(label, text string, dst interface{}) {
+		if err := json.Unmarshal([]byte(text), dst); err != nil {
+			jsonErrs = append(jsonErrs, fmt.Sprintf("%s: %v", label, err))
+		}
+	}
+
 	cfg.OutDir = uiOut.Text()
+	cfg.Storage.SpoolDir = strings.TrimSpace(uiSpoolDir.Text())
 	cfg.Save = saveModes[clampIndex(uiSave.CurrentIndex(), len(saveModes))]
 	cfg.MaxJobMB = int(uiMaxJob.Value())
 	cfg.Bind = uiBind.Text()
+	cfg.Dashboard.Enabled = uiDashEnabled.Checked()
+	cfg.Notifications = uiNotifications.Checked()
+
+	// Start-on-login is a system-state toggle (registry), not a cfg field, so
+	// apply it directly here. A failure is non-fatal: record it as a soft error.
+	if err := setRunAtLogin(uiRunAtLogin.Checked()); err != nil {
+		jsonErrs = append(jsonErrs, fmt.Sprintf("start-at-login: %v", err))
+	}
 
 	cfg.Ports.Raw9100 = rowPort(rowRaw)
 	cfg.Ports.LPR = rowPort(rowLPR)
@@ -546,9 +887,15 @@ func applyUIToConfig() {
 	cfg.Ports.Dashboard = rowPort(rowDash)
 
 	cfg.Printer.Name = uiName.Text()
+	cfg.Printer.Info = uiInfo.Text()
 	cfg.Printer.MakeAndModel = uiModel.Text()
 	cfg.Printer.Location = uiLoc.Text()
 	cfg.Printer.Serial = uiSerial.Text()
+	cfg.Printer.DocumentFormats = splitCSV(uiDocFormats.Text())
+	cfg.Printer.DefaultFormat = strings.TrimSpace(uiDefaultFormat.Text())
+	cfg.Printer.Sides = splitCSV(uiSides.Text())
+	cfg.Printer.Resolutions = parseIntList(uiResolutions.Text())
+	cfg.Printer.Media = splitCSV(uiMedia.Text())
 	cfg.Printer.Color = uiColor.Checked()
 	cfg.Printer.EnforceFormats = uiEnforce.Checked()
 
@@ -561,6 +908,41 @@ func applyUIToConfig() {
 	cfg.SNMP.SysObjectID = uiSysObj.Text()
 	cfg.SNMP.PageCount = int(uiPageCount.Value())
 	cfg.SNMP.TonerLevelPct = int(uiToner.Value())
+	cfg.SNMP.V3Enabled = uiSnmpV3.Checked()
+	cfg.SNMP.AllowV1V2c = uiSnmpAllowV12.Checked()
+	cfg.SNMP.EngineID = strings.TrimSpace(uiEngineID.Text())
+	applyJSON("SNMP USM users", uiSnmpUsers.Text(), &cfg.SNMP.Users)
+
+	cfg.MDNS.Enabled = uiMdnsEnabled.Checked()
+	cfg.MDNS.Instance = strings.TrimSpace(uiMdnsInstance.Text())
+	cfg.MDNS.Hostname = strings.TrimSpace(uiMdnsHostname.Text())
+	cfg.MDNS.AirPrint = uiMdnsAirPrint.Checked()
+	cfg.WSD.Enabled = uiWsdEnabled.Checked()
+	cfg.WSD.Port = int(uiWsdPort.Value())
+	cfg.WSD.Discovery = uiWsdDiscovery.Checked()
+
+	cfg.SMB.Enabled = uiSmbEnabled.Checked()
+	cfg.SMB.Port = int(uiSmbPort.Value())
+	cfg.SMB.ShareName = strings.TrimSpace(uiSmbShare.Text())
+	cfg.SMB.RequireAuth = uiSmbRequireAuth.Checked()
+	cfg.SMB.Sign = uiSmbSign.Checked()
+	cfg.SMB.Encrypt = uiSmbEncrypt.Checked()
+	applyJSON("SMB users", uiSmbUsers.Text(), &cfg.SMB.Users)
+
+	cfg.EBCDIC.Enabled = uiEbcdicEnabled.Checked()
+	cfg.EBCDIC.DefaultCodePage = ebcdicCodePages[clampIndex(uiEbcdicCodePage.CurrentIndex(), len(ebcdicCodePages))]
+	cfg.EBCDIC.AutoDetect = uiEbcdicAuto.Checked()
+	cfg.EBCDIC.DecodedSidecar = uiEbcdicSidecar.Checked()
+	cfg.EBCDIC.CarriageControl = carriageModes[clampIndex(uiEbcdicCarriage.CurrentIndex(), len(carriageModes))]
+	applyJSON("LPD queue defaults", uiLpdQueueDefaults.Text(), &cfg.LPD.QueueDefaults)
+
+	cfg.Forward.Enabled = uiFwdEnabled.Checked()
+	cfg.Forward.Capture = captureModes[clampIndex(uiFwdCapture.CurrentIndex(), len(captureModes))]
+	applyJSON("Forward macros", uiFwdMacros.Text(), &cfg.Forward.Macros)
+	applyJSON("Forward targets", uiFwdTargets.Text(), &cfg.Forward.Targets)
+
+	cfg.DLP.Enabled = uiDlpEnabled.Checked()
+	applyJSON("DLP rules", uiDlpRules.Text(), &cfg.DLP.Rules)
 
 	cfg.Raw.ParsePJL = uiRawParsePJL.Checked()
 	cfg.Raw.SplitOnUEL = uiRawSplitUEL.Checked()
@@ -590,6 +972,7 @@ func applyUIToConfig() {
 	cfg.Log.Syslog.AppName = strings.TrimSpace(uiSyslogApp.Text())
 	cfg.Log.Syslog.RFC5424 = uiSyslogRFC5424.Checked()
 	configureLogging() // re-apply level, format, JSON-lines, and syslog live
+	return jsonErrs
 }
 
 func indexOf(list []string, v string, def int) int {
@@ -627,29 +1010,84 @@ func onBrowse() {
 	}
 }
 
-func onSave() {
-	applyUIToConfig()
-	if err := dumpConfig(configFilePath); err != nil {
-		walk.MsgBox(mw, "Save failed", err.Error(), walk.MsgBoxIconError)
-		return
+// applyAndPersist applies the UI to the live config and writes it to disk,
+// bouncing the engine if it is running so cfg is never mutated under live
+// handlers. If restart is requested (or the engine was running), the engine is
+// (re)started afterward.
+// applyValidateAndPersist applies the UI, runs validation, and only persists
+// (and optionally restarts) when there are no JSON parse errors and no
+// hard validation errors. It returns a slice of human-readable blocking issues;
+// an empty slice means the save proceeded. Warnings are returned separately so
+// the caller can show them without blocking.
+func applyValidateAndPersist(restart bool) (blocking []string, warnings []string, err error) {
+	wasRunning := engineRunning()
+	if wasRunning {
+		if err = engineStop(); err != nil { // synchronous: drains all handlers
+			return nil, nil, err
+		}
 	}
-	walk.MsgBox(mw, "Saved", "Configuration saved to:\n"+configFilePath, walk.MsgBoxIconInformation)
-	updateStatus()
+
+	jsonErrs := applyUIToConfig()
+	blocking = append(blocking, jsonErrs...)
+
+	for _, is := range validateConfig(cfg) {
+		if is.Severity == sevError {
+			blocking = append(blocking, is.String())
+		} else {
+			warnings = append(warnings, is.String())
+		}
+	}
+
+	// On any blocking issue, do not persist or restart; restart the engine only
+	// if it had been running so we don't leave the service stopped.
+	if len(blocking) > 0 {
+		if wasRunning {
+			if e := engineStart(); e != nil {
+				return blocking, warnings, e
+			}
+		}
+		return blocking, warnings, nil
+	}
+
+	if err = dumpConfig(configFilePath); err != nil {
+		return blocking, warnings, err
+	}
+	if restart || wasRunning {
+		if err = engineStart(); err != nil {
+			return blocking, warnings, err
+		}
+	}
+	return blocking, warnings, nil
 }
 
-func onSaveRestart() {
-	applyUIToConfig()
-	if err := dumpConfig(configFilePath); err != nil {
+func onSave() { doSave(false) }
+
+func onSaveRestart() { doSave(true) }
+
+// doSave applies the UI, validates, and persists. Blocking issues (JSON parse
+// errors or hard validation errors) are shown and the save is aborted so the
+// user can fix them; warnings are shown but do not block.
+func doSave(restart bool) {
+	blocking, warnings, err := applyValidateAndPersist(restart)
+	if err != nil {
 		walk.MsgBox(mw, "Save failed", err.Error(), walk.MsgBoxIconError)
+		updateStatus()
 		return
 	}
-	if err := engineStop(); err != nil {
-		walk.MsgBox(mw, "Stop failed", err.Error(), walk.MsgBoxIconError)
+	if len(blocking) > 0 {
+		msg := "Configuration was NOT saved. Fix these issues and try again:\n\n" + strings.Join(blocking, "\n")
+		if len(warnings) > 0 {
+			msg += "\n\nWarnings:\n" + strings.Join(warnings, "\n")
+		}
+		walk.MsgBox(mw, "Cannot save", msg, walk.MsgBoxIconError)
+		updateStatus()
+		return
 	}
-	time.Sleep(300 * time.Millisecond)
-	if err := engineStart(); err != nil {
-		walk.MsgBox(mw, "Start failed", err.Error(), walk.MsgBoxIconError)
+	msg := "Configuration saved to:\n" + configFilePath
+	if len(warnings) > 0 {
+		msg += "\n\nWarnings:\n" + strings.Join(warnings, "\n")
 	}
+	walk.MsgBox(mw, "Saved", msg, walk.MsgBoxIconInformation)
 	updateStatus()
 }
 
@@ -772,11 +1210,10 @@ func openDashboard() {
 }
 
 func openFolder() {
-	dir, err := filepath.Abs(cfg.OutDir)
-	if err != nil {
-		dir = cfg.OutDir
-	}
-	_ = exec.Command("explorer", dir).Start()
+	// Use captureDir() so the tray "open captures folder" opens the SAME
+	// (exe-relative) directory the engine actually writes to, even when the
+	// process cwd differs from the exe dir (e.g. running as a service).
+	_ = exec.Command("explorer", captureDir()).Start()
 }
 
 func addTrayAction(text string, fn func()) {
@@ -798,7 +1235,7 @@ func browseFile(target *walk.LineEdit) {
 func onGenerateCert() {
 	dir := strings.TrimSpace(uiOut.Text())
 	if dir == "" {
-		dir = cfg.OutDir
+		dir = captureDir()
 	}
 	absdir, err := filepath.Abs(dir)
 	if err != nil {
@@ -819,11 +1256,12 @@ func onGenerateCert() {
 }
 
 func onFirewallAdd() {
-	if err := addFirewallRules(); err != nil {
+	n, err := addFirewallRules()
+	if err != nil {
 		walk.MsgBox(mw, "Firewall", "Failed (run printcap as Administrator?):\n\n"+err.Error(), walk.MsgBoxIconError)
 		return
 	}
-	walk.MsgBox(mw, "Firewall", "Inbound allow rules added for printcap.", walk.MsgBoxIconInformation)
+	walk.MsgBox(mw, "Firewall", fmt.Sprintf("Added %d inbound port rule(s) for printcap.", n), walk.MsgBoxIconInformation)
 }
 
 func onFirewallRemove() {

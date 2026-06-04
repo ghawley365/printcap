@@ -51,6 +51,7 @@ type job struct {
 	SavedAs   string `json:"saved_as,omitempty"`
 	data      []byte // not serialized; written to the raw file instead
 
+	DLPMatches   []string        `json:"dlp_matches,omitempty"`
 	Forwards     []forwardResult `json:"forwards,omitempty"`
 	captureBase  string          // set by sink.save (Task 8); base name for -sent files
 	captureExt   string          // set by sink.save (Task 8); chosen extension
@@ -75,6 +76,8 @@ var (
 func main() {
 	configPath := flag.String("config", "", "path to a JSON config file to load (default: printcap.json next to the exe)")
 	dumpPath := flag.String("dump-config", "", "write effective config to this path ('-' for stdout) and exit")
+	checkConfig := flag.Bool("check", false, "validate the effective config, print issues + recommended fixes, and exit")
+	showVersion := flag.Bool("version", false, "print the printcap version and exit")
 	svcCmd := flag.String("service", "", "Windows service control: install | remove | start | stop | status")
 	fwCmd := flag.String("firewall", "", "Windows firewall: add | remove inbound allow rules for this exe")
 	console := flag.Bool("console", false, "run headless in the console instead of launching the GUI")
@@ -101,6 +104,12 @@ func main() {
 	flag.Bool("smb", false, "enable the experimental SMB print share")
 	flag.Bool("wsd", false, "enable the experimental WSD print service")
 	flag.Parse()
+
+	// -version: print the build version and exit before any heavy init.
+	if *showVersion {
+		fmt.Println(versionString())
+		return
+	}
 
 	// Resolve the config file path (explicit flag, else next to the exe).
 	configFilePath = *configPath
@@ -134,13 +143,50 @@ func main() {
 		return
 	}
 
+	// -check: validate the effective config (post-overrides), print every issue
+	// with its recommended fix, summarize, and exit non-zero on any error.
+	if *checkConfig {
+		issues := validateConfig(cfg)
+		var errs, warns int
+		for _, is := range issues {
+			fmt.Println(is.String())
+			if is.Severity == sevError {
+				errs++
+			} else {
+				warns++
+			}
+		}
+		fmt.Printf("%d error(s), %d warning(s)\n", errs, warns)
+		if hasErrors(issues) {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
 	// Bring up logging before anything else writes a line; route the standard
 	// library logger into our sinks so nothing is lost.
 	configureLogging()
 	log.SetFlags(0)
 	log.SetOutput(stdLogWriter{})
-	logInfo("app", "printcap starting (config %q, level %s)", configFilePath, logger.Level())
+	logInfo("app", "%s starting (config %q, level %s)", versionString(), configFilePath, logger.Level())
+
+	// Surface config problems up-front so operators see *why* a listener may be
+	// missing. Non-fatal: the engine already skips listeners that fail to bind.
+	logConfigIssues(validateConfig(cfg))
+
 	dispatch() // platform-specific: GUI/service on Windows, console elsewhere
+}
+
+// logConfigIssues logs each validation issue (errors via logErr, warnings via
+// logWarn) with its recommended fix, without exiting.
+func logConfigIssues(issues []configIssue) {
+	for _, is := range issues {
+		if is.Severity == sevError {
+			logErr("config", "%s: %s — fix: %s", is.Field, is.Message, is.Fix)
+		} else {
+			logWarn("config", "%s: %s — fix: %s", is.Field, is.Message, is.Fix)
+		}
+	}
 }
 
 // runConsole starts the engine and runs until interrupted (Ctrl+C). Used on
@@ -160,8 +206,9 @@ func runConsole() {
 }
 
 func printBanner(n int) {
-	abs, _ := filepath.Abs(cfg.OutDir)
+	abs := captureDir()
 	fmt.Println("printcap — network print server & spool capture")
+	fmt.Printf("  %s\n", versionString())
 	fmt.Printf("  printer    : %q (%s)\n", cfg.Printer.Name, cfg.Printer.MakeAndModel)
 	fmt.Printf("  output dir : %s  (mode=%s)\n", abs, cfg.Save)
 	for _, a := range engine.Active() {

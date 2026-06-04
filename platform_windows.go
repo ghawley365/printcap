@@ -21,10 +21,12 @@ func dispatch() {
 		return
 	}
 	if optServiceCmd != "" {
+		maybeElevate(serviceCmdNeedsAdmin(optServiceCmd))
 		serviceControl(optServiceCmd)
 		return
 	}
 	if optFirewall != "" {
+		maybeElevate(firewallCmdNeedsAdmin(optFirewall))
 		firewallControl(optFirewall)
 		return
 	}
