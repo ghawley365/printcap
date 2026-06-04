@@ -8,3 +8,6 @@ coverage.txt
 # Runtime log files (never version-controlled).
 printcap.log
 *.log
+
+# macOS
+.DS_Store
