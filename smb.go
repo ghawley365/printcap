@@ -59,6 +59,7 @@ func handleSMBConn(c net.Conn) {
 		}
 
 		var resp []byte
+		var ssStatus uint32 // SESSION_SETUP status, for preauth-fold decisions
 		switch reqHdr.Command {
 		case smb2Negotiate:
 			r, st, ok := handleNegotiate(msg)
@@ -69,18 +70,17 @@ func handleSMBConn(c net.Conn) {
 			s = newSMBSession()
 			s.dialect, s.cipher = nr.dialect, nr.cipher
 			s.remoteAddr = c.RemoteAddr().String()
-			// PREAUTH FIX (MS-SMB2 §3.3.5.4): fold the NEGOTIATE request and
-			// response into the preauth-integrity hash BEFORE any SESSION_SETUP
-			// leg, so the session-setup preauth chain starts from the correct
-			// base hash.
-			updatePreauth(s, msg)
-			updatePreauth(s, r)
 			resp = r
 		case smb2SessionSetup:
 			if s == nil {
 				return
 			}
-			resp, _, _ = handleSessionSetup(s, msg)
+			// Fold the request into the preauth hash BEFORE the handler so the
+			// leg-2 key derivation includes it (MS-SMB2 §3.3.5.4). The request
+			// bytes are not rewritten by patchResponseHeader, so folding here is
+			// the same bytes the client hashed.
+			updatePreauth(s, msg)
+			resp, ssStatus, _ = handleSessionSetup(s, msg)
 		case smb2TreeConnect:
 			if s == nil || !s.authComplete {
 				return
@@ -136,6 +136,23 @@ func handleSMBConn(c net.Conn) {
 		// echo TreeId, set SessionId.
 		patchResponseHeader(resp, reqHdr, s)
 
+		// Preauth-integrity folding uses the FINAL on-the-wire response bytes
+		// (post-patch), matching exactly what the client hashes (MS-SMB2
+		// §3.3.5.4). Getting this wrong yields a signing/encryption key that
+		// disagrees with the client.
+		switch reqHdr.Command {
+		case smb2Negotiate:
+			updatePreauth(s, msg)  // NEGOTIATE request
+			updatePreauth(s, resp) // NEGOTIATE response
+		case smb2SessionSetup:
+			// The request was folded before the handler; fold the response only
+			// for the non-final (MORE_PROCESSING) leg. The final SUCCESS response
+			// is signed with the derived key and is not part of the hash.
+			if ssStatus == statusMoreProcessingRequired {
+				updatePreauth(s, resp)
+			}
+		}
+
 		// Sign authenticated non-guest responses if signing was negotiated.
 		if s != nil && s.authComplete && s.signingRequired && !s.guest && len(s.signingKey) == 16 {
 			resp = smbSign(s.signingKey, resp)
@@ -181,8 +198,10 @@ func patchResponseHeader(resp []byte, req smb2Header, s *smbSession) {
 	flags |= smb2FlagsServerToRedir
 	binary.LittleEndian.PutUint32(resp[16:20], flags)
 
-	// TreeId @36 echoes the request.
-	binary.LittleEndian.PutUint32(resp[36:40], req.TreeId)
+	// TreeId @36 is left as the handler set it: TREE_CONNECT assigns a NEW
+	// TreeId (the request's is 0), and every other handler already echoes the
+	// request's TreeId. Overwriting it here would hand back TreeId 0 on
+	// TREE_CONNECT and break all subsequent tree-scoped operations.
 
 	// SessionId @40: request value if non-zero, else session value.
 	sid := req.SessionId

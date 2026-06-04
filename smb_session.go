@@ -293,10 +293,10 @@ func handleSessionSetupLeg1(s *smbSession, reqHdr smb2Header, reqMsg []byte) ([]
 
 	resp := buildSessionSetupResponse(reqHdr, s.sessionID, statusMoreProcessingRequired, 0, secToken)
 
-	// Fold leg-1 request then leg-1 response into the preauth hash, in order.
-	updatePreauth(s, reqMsg)
-	updatePreauth(s, resp)
-
+	// Preauth folding is done centrally by the connection driver (smb.go) using
+	// the FINAL on-the-wire bytes — the response header is rewritten by
+	// patchResponseHeader after this returns, so folding here would hash bytes
+	// the client never sees and break key derivation.
 	return resp, statusMoreProcessingRequired, false
 }
 
@@ -306,9 +306,9 @@ func handleSessionSetupLeg1(s *smbSession, reqHdr smb2Header, reqMsg []byte) ([]
 // cipher keys, and builds the SUCCESS response. With RequireAuth disabled an
 // unmatched/anonymous client is granted a GUEST session.
 func handleSessionSetupLeg2(s *smbSession, reqHdr smb2Header, reqMsg, ntlmMsg []byte) ([]byte, uint32, bool) {
-	// Fold the leg-2 request BEFORE deriving keys: the preauth hash used for
-	// derivation is the value after this request is included.
-	updatePreauth(s, reqMsg)
+	// The leg-2 request is folded into the preauth hash by the connection driver
+	// (smb.go) BEFORE this handler runs, so by the time key derivation happens
+	// below the hash already includes it (MS-SMB2 §3.3.5.4).
 
 	domain, user, _, ok := parseAuthenticate(ntlmMsg)
 	if !ok {
