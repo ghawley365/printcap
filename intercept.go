@@ -250,10 +250,31 @@ func startInterceptor(c InterceptConf) (*interceptor, error) {
 		}
 	}
 
+	// Reset the live-view ring for this run; the pump feeds it per packet.
+	captureLive.reset(src.LinkType())
+
 	it.wg.Add(1)
 	trackGo(func() { defer it.wg.Done(); it.pump() })
+	// Periodically flush the pcap so the file-backed viewer/follow-stream reflects
+	// the in-progress capture (the live view uses the in-memory ring instead).
+	it.wg.Add(1)
+	trackGo(func() { defer it.wg.Done(); it.flushLoop() })
 	logInfo("intercept", "capturing to %s (iface=%q, link=%d)", interceptPcapPath(c), c.Interface, src.LinkType())
 	return it, nil
+}
+
+// flushLoop flushes the pcap writer once a second until the interceptor closes.
+func (it *interceptor) flushLoop() {
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-it.done:
+			return
+		case <-t.C:
+			_ = it.pw.flush()
+		}
+	}
 }
 
 // pump copies frames from the source into the pcap writer until the source
@@ -277,6 +298,7 @@ func (it *interceptor) pump() {
 				logErr("intercept", "pcap write failed, stopping capture: %v", err)
 				return
 			}
+			captureLive.record(capturedPacket{ts: ts, data: p.data}) // live-view ring
 			if it.cv != nil {
 				it.cv.consume(p.data, ts)
 			}

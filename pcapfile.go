@@ -111,6 +111,18 @@ func (p *pcapWriter) writePacket(ts time.Time, data []byte) error {
 	return nil
 }
 
+// flush writes any buffered frames to the underlying file without closing it, so
+// a viewer reading the file mid-capture sees recent packets. Safe for concurrent
+// use; a no-op after Close.
+func (p *pcapWriter) flush() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return nil
+	}
+	return p.bw.Flush()
+}
+
 // stats returns the number of packets and captured bytes written so far.
 func (p *pcapWriter) stats() (packets, bytes uint64) {
 	p.mu.Lock()

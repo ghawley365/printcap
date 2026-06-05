@@ -471,8 +471,11 @@ func defaultConfig() *Config {
 				Expiry:       "",
 			},
 			Carve: CarveConf{
-				Enabled:      true,                  // on by default so intercept yields typed files, not just a pcap
-				Ports:        []int{9100, 515, 631}, // raw/JetDirect, LPR/LPD, IPP
+				Enabled: true, // on by default so intercept yields typed files, not just a pcap
+				// raw/JetDirect, LPR/LPD, IPP, and the printer's HTTP management/API
+				// ports (EWS/REST) so API traffic is reassembled too. 443/HTTPS is
+				// captured to the pcap but not carved (TLS-encrypted).
+				Ports:        []int{9100, 515, 631, 80, 8080},
 				MaxStreamMB:  256,
 				IdleFlushSec: 10,
 			},

@@ -34,6 +34,7 @@ func dashboardHandler() http.Handler {
 	mux.HandleFunc("/api/capture", apiCapture)
 	mux.HandleFunc("/api/capturefile", apiCaptureFile)
 	mux.HandleFunc("/api/capture/stream", apiCaptureStream)
+	mux.HandleFunc("/api/capture/live", apiCaptureLive)
 	mux.HandleFunc("/api/job", apiJobData)
 	mux.HandleFunc("/api/jobpreview", apiJobPreview)
 	mux.HandleFunc("/api/jobdelete", apiJobDelete)
@@ -144,8 +145,53 @@ func apiCaptureStream(w http.ResponseWriter, r *http.Request) {
 		"b_to_a_len": len(ba),
 		"a_to_b":     base64.StdEncoding.EncodeToString(ab),
 		"b_to_a":     base64.StdEncoding.EncodeToString(ba),
+		"a_is_http":  looksHTTP(ab),
+		"b_is_http":  looksHTTP(ba),
 		"capped":     len(ab) >= maxFollowBytes || len(ba) >= maxFollowBytes,
 		"parsed":     parsed,
+	})
+}
+
+// apiCaptureLive returns packets recorded since the caller's cursor from the
+// in-memory live ring, applying the same filters as the static viewer. The UI
+// polls it for a live, scrolling capture window without re-reading the pcap.
+func apiCaptureLive(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	q := r.URL.Query()
+	since, _ := strconv.ParseUint(q.Get("since"), 10, 64)
+	limit := atoiDefault(q.Get("limit"), 1000)
+	if limit <= 0 || limit > 4000 {
+		limit = 1000
+	}
+	f := captureFilter{
+		class: q.Get("class"),
+		proto: q.Get("proto"),
+		svc:   q.Get("svc"),
+		port:  atoiDefault(q.Get("port"), 0),
+		q:     q.Get("q"),
+	}
+	recs, link, cursor, firstNo, dropped := captureLive.since(since, limit)
+	rows := make([]packetSummary, 0, len(recs))
+	for i, rec := range recs {
+		s := dissectSummary(link, rec.data)
+		s.No = int(firstNo) + i
+		s.Len = rec.origLen
+		s.Time = rec.ts.Format("15:04:05.000")
+		if captureMatch(s, f) {
+			rows = append(rows, s)
+		}
+	}
+	seq, depth := captureLive.stats()
+	writeJSON(w, map[string]interface{}{
+		"packets": rows,
+		"cursor":  cursor,
+		"dropped": dropped,
+		"total":   seq,
+		"depth":   depth,
+		"running": engine.Running() && interceptModule != nil,
 	})
 }
 

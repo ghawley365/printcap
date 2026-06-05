@@ -969,9 +969,21 @@ inspect, export, and prune captures, plus control listeners and the engine.
   inputs, list/map blocks as JSON), then **Save** or **Save & restart**. Secrets
   display as `***` and are preserved if left unchanged. Writes are refused from
   non-loopback clients unless `dashboard.allow_remote_admin` is set (see §14).
-* **Captures viewer** — when intercept mode (§9a) has produced a pcap, browse it
-  as a color-coded, filterable packet list (resets/ICMP errors highlighted;
-  filter by class/protocol/text) and download the raw `.pcap`.
+* **Captures viewer** — a packet window for intercept mode (§9a):
+  * **Go live** — a scrolling, real-time view fed from an in-memory ring as
+    packets arrive (pause / clear / auto-scroll; shows a "missed N" notice if a
+    burst overruns the ring). **Refresh (static)** reads the saved pcap instead.
+  * **Filtering** — by free text, **port**, **service** (HTTP/EWS, HTTPS, IPP,
+    raw/9100, LPR, SNMP, SMB, WSD, mDNS), packet **class** (RST/ICMP-error/SYN/
+    FIN/data), and protocol. Resets and ICMP errors are color-coded.
+  * **Follow TCP stream** — click any TCP row to reassemble both directions
+    (client→server / server→client) with an auto/text/hex view; HTTP shows as
+    text, so **printer web-API (EWS/REST) and IPP exchanges are readable**. Each
+    direction is downloadable, and the whole `.pcap` is one click away.
+
+  Printer **API traffic** (the embedded web server / REST API on ports 80 and
+  8080) is captured and reassembled like any other stream; HTTPS (443) is
+  captured to the pcap but encrypted, so it can't be reassembled without keys.
 * **Light / dark theme** toggle.
 
 > **Note:** apply settings from *either* the native GUI *or* the web editor, not

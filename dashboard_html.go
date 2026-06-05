@@ -85,6 +85,10 @@ const dashboardHTML = `<!doctype html>
   table.cap td{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;white-space:nowrap;}
   table.cap tr[data-a]{cursor:pointer;}
   table.cap tr[data-a]:hover td{background:var(--line);}
+  #capTable.live{max-height:540px;overflow:auto;border:1px solid var(--line);border-radius:6px;}
+  #capTable.live thead th{position:sticky;top:0;background:var(--panel);}
+  .svc{background:var(--line);color:var(--accent);border-radius:3px;padding:0 5px;font-size:11px;}
+  #capLiveStat{align-self:center;color:var(--good);font-weight:600;}
   tr.cap-reset td{color:var(--bad);font-weight:600;}
   tr.cap-error td{color:#e3b341;font-weight:600;}
   tr.cap-syn td{color:var(--good);}
@@ -134,6 +138,19 @@ const dashboardHTML = `<!doctype html>
     </div>
     <div class="controls">
       <input id="capQ" class="grow" placeholder="filter by IP, port, flag, info…">
+      <input id="capPort" type="number" min="0" max="65535" placeholder="port" style="width:90px;">
+      <select id="capSvc">
+        <option value="">any service</option>
+        <option value="http">HTTP (API/EWS)</option>
+        <option value="https">HTTPS</option>
+        <option value="ipp">IPP</option>
+        <option value="raw">raw/9100</option>
+        <option value="lpr">LPR</option>
+        <option value="snmp">SNMP</option>
+        <option value="smb">SMB</option>
+        <option value="wsd">WSD</option>
+        <option value="mdns">mDNS</option>
+      </select>
       <select id="capClass">
         <option value="">all packets</option>
         <option value="reset">resets (RST)</option>
@@ -154,8 +171,15 @@ const dashboardHTML = `<!doctype html>
         <option value="500" selected>500 / page</option>
         <option value="1000">1000 / page</option>
       </select>
-      <button id="capRefresh">Refresh</button>
       <a class="dl" id="capDl" href="api/capturefile">⤓ pcap</a>
+    </div>
+    <div class="controls">
+      <button id="capLive">▶ Go live</button>
+      <button id="capPause" disabled>⏸ Pause</button>
+      <button id="capClear">Clear</button>
+      <button id="capRefresh">Refresh (static)</button>
+      <label class="muted"><input type="checkbox" id="capAutoscroll" checked> auto-scroll</label>
+      <span class="muted" id="capLiveStat"></span>
     </div>
     <div id="capTable"><div class="empty">Loading capture…</div></div>
     <div class="pager">
@@ -433,58 +457,113 @@ function startSSE(){
   es.onerror=function(){/* browser auto-reconnects */};
 }
 
-// ---- network capture viewer ----
-var capState={q:'',cls:'',proto:'',offset:0,limit:500,matched:0};
-function loadCapture(){
-  var p=new URLSearchParams();
+// ---- network capture viewer (static + live) ----
+var capState={q:'',port:'',svc:'',cls:'',proto:'',offset:0,limit:500,matched:0,
+              live:false,paused:false,cursor:0,rows:[],dropped:0,timer:null};
+
+function capFilters(p){
   if(capState.q)p.set('q',capState.q);
+  if(capState.port)p.set('port',capState.port);
+  if(capState.svc)p.set('svc',capState.svc);
   if(capState.cls)p.set('class',capState.cls);
   if(capState.proto)p.set('proto',capState.proto);
-  p.set('offset',capState.offset);p.set('limit',capState.limit);
+  return p;
+}
+function svcTag(s){return s?(' <span class="svc">'+esc(s)+'</span>'):'';}
+function capRowHTML(x){
+  var follow=(x.proto==='TCP'&&x.src&&x.dst)?(' data-a="'+esc(x.src)+'" data-b="'+esc(x.dst)+'" title="click: follow TCP stream"'):'';
+  return '<tr class="cap-'+esc(x.class)+'"'+follow+'>'
+    +'<td>'+x.no+'</td><td>'+esc(x.time)+'</td><td>'+esc(x.proto)+svcTag(x.svc)+'</td>'
+    +'<td>'+esc(x.src||'—')+'</td><td>'+esc(x.dst||'—')+'</td>'
+    +'<td>'+esc(x.len)+'</td><td>'+esc(x.info)+'</td></tr>';
+}
+function capTableHTML(list){
+  return '<table class="cap"><thead><tr><th>#</th><th>Time</th><th>Proto</th><th>Source</th><th>Destination</th><th>Len</th><th>Info</th></tr></thead><tbody>'
+    +list.map(capRowHTML).join('')+'</tbody></table>';
+}
+function capAttachFollow(){
+  Array.prototype.forEach.call(document.querySelectorAll('#capTable tr[data-a]'),function(tr){
+    tr.onclick=function(){openStream(tr.getAttribute('data-a'),tr.getAttribute('data-b'));};
+  });
+}
+
+// --- static (file) mode ---
+function loadCapture(){
+  var p=capFilters(new URLSearchParams());p.set('offset',capState.offset);p.set('limit',capState.limit);
   fetch('api/capture?'+p.toString()).then(function(r){return r.json();}).then(function(d){
-    capState.matched=d.matched||0;renderCapture(d);
+    capState.matched=d.matched||0;
+    document.getElementById('capInfo').textContent= d.total_parsed
+      ? '— '+esc(d.file)+' · '+d.total_parsed+' parsed'+(d.truncated?' (capped)':'')+' · '+d.matched+' match filter'
+      : '— '+esc(d.file||'no capture file')+' (empty; start intercept mode to capture)';
+    var ps=d.packets||[];
+    document.getElementById('capTable').innerHTML= ps.length?capTableHTML(ps):'<div class="empty">No packets match this filter.</div>';
+    capAttachFollow();
+    var from=capState.matched?capState.offset+1:0,to=Math.min(capState.offset+capState.limit,capState.matched);
+    document.getElementById('capPageInfo').textContent='showing '+from+'–'+to+' of '+capState.matched;
+    document.getElementById('capPrev').disabled=capState.offset<=0;
+    document.getElementById('capNext').disabled=capState.offset+capState.limit>=capState.matched;
   }).catch(function(e){document.getElementById('capTable').innerHTML='<div class="empty">Failed to load capture: '+esc(e)+'</div>';});
 }
-function renderCapture(d){
-  var info=document.getElementById('capInfo');
-  if(!d.total_parsed){
-    info.textContent='— '+esc(d.file||'no capture file')+' (empty; run intercept mode to capture traffic)';
-  }else{
-    info.textContent='— '+esc(d.file)+' · '+d.total_parsed+' packets parsed'+(d.truncated?' (capped)':'')+' · '+d.matched+' match filter';
-  }
-  var ps=d.packets||[];
-  if(!ps.length){
-    document.getElementById('capTable').innerHTML='<div class="empty">No packets match this filter.</div>';
-  }else{
-    var head='<table class="cap"><thead><tr><th>#</th><th>Time</th><th>Proto</th><th>Source</th><th>Destination</th><th>Len</th><th>Info</th></tr></thead><tbody>';
-    var rows=ps.map(function(x){
-      var follow=(x.proto==='TCP'&&x.src&&x.dst)?(' data-a="'+esc(x.src)+'" data-b="'+esc(x.dst)+'" title="click: follow TCP stream"'):'';
-      return '<tr class="cap-'+esc(x.class)+'"'+follow+'>'
-        +'<td>'+x.no+'</td><td>'+esc(x.time)+'</td><td>'+esc(x.proto)+'</td>'
-        +'<td>'+esc(x.src||'—')+'</td><td>'+esc(x.dst||'—')+'</td>'
-        +'<td>'+esc(x.len)+'</td><td>'+esc(x.info)+'</td></tr>';
-    }).join('');
-    document.getElementById('capTable').innerHTML=head+rows+'</tbody></table>';
-    Array.prototype.forEach.call(document.querySelectorAll('#capTable tr[data-a]'),function(tr){
-      tr.onclick=function(){openStream(tr.getAttribute('data-a'),tr.getAttribute('data-b'));};
-    });
-  }
-  var from=capState.matched?capState.offset+1:0;var to=Math.min(capState.offset+capState.limit,capState.matched);
-  document.getElementById('capPageInfo').textContent='showing '+from+'–'+to+' of '+capState.matched;
-  document.getElementById('capPrev').disabled=capState.offset<=0;
-  document.getElementById('capNext').disabled=capState.offset+capState.limit>=capState.matched;
+
+// --- live mode ---
+function renderLive(){
+  var c=document.getElementById('capTable');
+  c.innerHTML= capState.rows.length?capTableHTML(capState.rows):'<div class="empty">Waiting for packets… (start intercept mode on the capture interface)</div>';
+  capAttachFollow();
+  if(document.getElementById('capAutoscroll').checked){c.scrollTop=c.scrollHeight;}
 }
+function pollLive(){
+  if(!capState.live)return;
+  if(capState.paused){capState.timer=setTimeout(pollLive,1000);return;}
+  var p=capFilters(new URLSearchParams());p.set('since',capState.cursor);p.set('limit',1000);
+  fetch('api/capture/live?'+p.toString()).then(function(r){return r.json();}).then(function(d){
+    capState.cursor=d.cursor||0; capState.dropped+=(d.dropped||0);
+    if(d.packets&&d.packets.length){
+      capState.rows=capState.rows.concat(d.packets);
+      if(capState.rows.length>2000)capState.rows=capState.rows.slice(capState.rows.length-2000);
+      renderLive();
+    }
+    document.getElementById('capLiveStat').textContent='● LIVE · '+(d.running?'capturing':'intercept not running')
+      +' · '+(d.total||0)+' pkts'+(capState.dropped?(' · missed '+capState.dropped):'');
+  }).catch(function(){});
+  if(capState.live)capState.timer=setTimeout(pollLive,1000);
+}
+function startLive(){
+  capState.live=true;capState.paused=false;capState.rows=[];capState.cursor=0;capState.dropped=0;
+  document.getElementById('capLive').textContent='■ Stop live';
+  document.getElementById('capPause').disabled=false;
+  document.getElementById('capTable').classList.add('live');
+  document.getElementById('capInfo').textContent='— live capture';
+  renderLive();pollLive();
+}
+function stopLive(){
+  capState.live=false;capState.paused=false;
+  if(capState.timer){clearTimeout(capState.timer);capState.timer=null;}
+  document.getElementById('capLive').textContent='▶ Go live';
+  var pb=document.getElementById('capPause');pb.disabled=true;pb.textContent='⏸ Pause';
+  document.getElementById('capTable').classList.remove('live');
+  document.getElementById('capLiveStat').textContent='';
+}
+function capFilterChanged(){
+  if(capState.live){capState.rows=[];renderLive();} // server applies filter to new packets
+  else{capState.offset=0;loadCapture();}
+}
+
 document.getElementById('captureBtn').onclick=function(){
   var p=document.getElementById('capturePanel');
-  if(p.style.display==='none'){p.style.display='';capState.offset=0;loadCapture();p.scrollIntoView({behavior:'smooth'});}
+  if(p.style.display==='none'){p.style.display='';if(!capState.live){capState.offset=0;loadCapture();}p.scrollIntoView({behavior:'smooth'});}
   else{p.style.display='none';}
 };
-document.getElementById('capQ').addEventListener('input',function(){capState.q=this.value;capState.offset=0;
-  clearTimeout(window._cqt);window._cqt=setTimeout(loadCapture,250);});
-document.getElementById('capClass').addEventListener('change',function(){capState.cls=this.value;capState.offset=0;loadCapture();});
-document.getElementById('capProto').addEventListener('change',function(){capState.proto=this.value;capState.offset=0;loadCapture();});
-document.getElementById('capPageSize').addEventListener('change',function(){capState.limit=parseInt(this.value,10)||500;capState.offset=0;loadCapture();});
-document.getElementById('capRefresh').onclick=loadCapture;
+document.getElementById('capLive').onclick=function(){ if(capState.live){stopLive();loadCapture();}else{startLive();} };
+document.getElementById('capPause').onclick=function(){ capState.paused=!capState.paused; this.textContent=capState.paused?'▶ Resume':'⏸ Pause'; };
+document.getElementById('capClear').onclick=function(){ if(capState.live){capState.rows=[];capState.dropped=0;renderLive();}else{loadCapture();} };
+document.getElementById('capRefresh').onclick=function(){ if(capState.live)stopLive(); loadCapture(); };
+document.getElementById('capQ').addEventListener('input',function(){capState.q=this.value;clearTimeout(window._cqt);window._cqt=setTimeout(capFilterChanged,250);});
+document.getElementById('capPort').addEventListener('input',function(){capState.port=this.value;clearTimeout(window._cpt);window._cpt=setTimeout(capFilterChanged,250);});
+document.getElementById('capSvc').addEventListener('change',function(){capState.svc=this.value;capFilterChanged();});
+document.getElementById('capClass').addEventListener('change',function(){capState.cls=this.value;capFilterChanged();});
+document.getElementById('capProto').addEventListener('change',function(){capState.proto=this.value;capFilterChanged();});
+document.getElementById('capPageSize').addEventListener('change',function(){capState.limit=parseInt(this.value,10)||500;capState.offset=0;if(!capState.live)loadCapture();});
 document.getElementById('capPrev').onclick=function(){capState.offset=Math.max(0,capState.offset-capState.limit);loadCapture();};
 document.getElementById('capNext').onclick=function(){if(capState.offset+capState.limit<capState.matched){capState.offset+=capState.limit;loadCapture();}};
 
@@ -492,7 +571,7 @@ document.getElementById('capNext').onclick=function(){if(capState.offset+capStat
 function hexdump(b64){
   if(!b64) return '<span class="muted">(no data this direction)</span>';
   var bin; try{bin=atob(b64);}catch(e){return '(decode error)';}
-  var max=8192,n=Math.min(bin.length,max),out=[];
+  var max=16384,n=Math.min(bin.length,max),out=[];
   for(var i=0;i<n;i+=16){
     var hex='',asc='';
     for(var j=0;j<16;j++){
@@ -502,27 +581,43 @@ function hexdump(b64){
     out.push(('00000000'+i.toString(16)).slice(-8)+'  '+hex+' '+esc(asc));
   }
   var s=out.join('\n');
-  if(bin.length>max)s+='\n… '+(bin.length-max)+' more bytes (download the pcap for the full stream)';
+  if(bin.length>max)s+='\n… '+(bin.length-max)+' more bytes (download for the full stream)';
   return s;
+}
+function asciidump(b64){
+  if(!b64) return '<span class="muted">(no data this direction)</span>';
+  var bin; try{bin=atob(b64);}catch(e){return '(decode error)';}
+  var max=65536; var s=bin.length>max?bin.slice(0,max):bin;
+  var out=esc(s);
+  if(bin.length>max)out+='\n… '+(bin.length-max)+' more bytes (download for the full stream)';
+  return out;
+}
+var lastStream=null;
+function streamPane(b64,isHttp,label,color,fname,mode){
+  var body=(mode==='hex')?hexdump(b64):(mode==='text'||(mode==='auto'&&isHttp))?asciidump(b64):hexdump(b64);
+  var dl=b64?(' <a class="dl" download="'+fname+'" href="data:application/octet-stream;base64,'+b64+'">⤓ download</a>'):'';
+  return '<div style="margin-top:12px;color:'+color+';font-weight:600;">'+label+dl+'</div><div class="preview">'+body+'</div>';
+}
+function renderStream(mode){
+  var d=lastStream; if(!d)return;
+  var html='<button class="close" id="modalClose">✕ close</button><h3>Follow TCP stream</h3>'
+    +'<div class="muted">'+esc(d.a)+' ⇄ '+esc(d.b)+(d.capped?' · capped at 256 KiB/direction':'')
+    +' &nbsp; view: <select id="streamMode"><option value="auto">auto (HTTP as text)</option><option value="text">text</option><option value="hex">hex</option></select></div>';
+  if(!d.a_to_b_len&&!d.b_to_a_len){
+    html+='<div class="empty">No reassembled payload (control-only flow, or data packets not captured).</div>';
+  }else{
+    html+=streamPane(d.a_to_b,d.a_is_http,'▶ '+esc(d.a)+' → '+esc(d.b)+' (client → server, '+(d.a_to_b_len||0)+' bytes)','var(--accent)','client-to-server.bin',mode);
+    html+=streamPane(d.b_to_a,d.b_is_http,'◀ '+esc(d.b)+' → '+esc(d.a)+' (server → client, '+(d.b_to_a_len||0)+' bytes)','var(--good)','server-to-client.bin',mode);
+  }
+  document.getElementById('modal').innerHTML=html;
+  document.getElementById('overlay').classList.add('show');
+  document.getElementById('modalClose').onclick=closeDetail;
+  var sm=document.getElementById('streamMode'); if(sm){sm.value=mode;sm.onchange=function(){renderStream(this.value);};}
 }
 function openStream(a,b){
   fetch('api/capture/stream?a='+encodeURIComponent(a)+'&b='+encodeURIComponent(b))
-  .then(function(r){return r.json();}).then(function(d){
-    var html='<button class="close" id="modalClose">✕ close</button>'
-      +'<h3>Follow TCP stream</h3>'
-      +'<div class="muted">'+esc(a)+' ⇄ '+esc(b)+(d.capped?' · capped at 256 KiB/direction':'')+'</div>';
-    if(!d.a_to_b_len&&!d.b_to_a_len){
-      html+='<div class="empty">No reassembled payload for this flow (it may be control-only, or the data packets were not captured).</div>';
-    }else{
-      html+='<div style="margin-top:12px;color:var(--accent);font-weight:600;">▶ '+esc(a)+' → '+esc(b)+' (client → server, '+(d.a_to_b_len||0)+' bytes)</div>';
-      html+='<div class="preview">'+hexdump(d.a_to_b)+'</div>';
-      html+='<div style="margin-top:12px;color:var(--good);font-weight:600;">◀ '+esc(b)+' → '+esc(a)+' (server → client, '+(d.b_to_a_len||0)+' bytes)</div>';
-      html+='<div class="preview">'+hexdump(d.b_to_a)+'</div>';
-    }
-    document.getElementById('modal').innerHTML=html;
-    document.getElementById('overlay').classList.add('show');
-    document.getElementById('modalClose').onclick=closeDetail;
-  }).catch(function(e){setSettingsMsg&&0;alert('Follow stream failed: '+e);});
+  .then(function(r){return r.json();}).then(function(d){lastStream=d;renderStream('auto');})
+  .catch(function(e){alert('Follow stream failed: '+e);});
 }
 
 // ---- settings editor (full config parity) ----

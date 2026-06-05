@@ -29,10 +29,59 @@ type packetSummary struct {
 	Time  string `json:"time"` // seconds since the first packet, e.g. "0.001234"
 	Src   string `json:"src"`  // ip:port (or ip for non-port protocols)
 	Dst   string `json:"dst"`
-	Proto string `json:"proto"` // TCP | UDP | ICMP | ICMPv6 | IPv4 | IPv6 | non-IP
-	Len   int    `json:"len"`   // captured frame length
-	Info  string `json:"info"`  // human-readable summary
-	Class string `json:"class"` // reset | syn | fin | error | data | other  (drives color)
+	Sport int    `json:"sport,omitempty"`
+	Dport int    `json:"dport,omitempty"`
+	Proto string `json:"proto"`         // TCP | UDP | ICMP | ICMPv6 | IPv4 | IPv6 | non-IP
+	Svc   string `json:"svc,omitempty"` // recognized service by port (http/https/ipp/raw/...)
+	Len   int    `json:"len"`           // captured frame length
+	Info  string `json:"info"`          // human-readable summary
+	Class string `json:"class"`         // reset | syn | fin | error | data | other (drives color)
+}
+
+// portService names the application/API protocol of a well-known port so the
+// viewer can highlight printer management/API traffic (HTTP EWS/REST, IPP, ...).
+func portService(p uint16) string {
+	switch p {
+	case 80, 8000, 8080:
+		return "http"
+	case 443, 8443:
+		return "https"
+	case 631:
+		return "ipp"
+	case 515:
+		return "lpr"
+	case 9100, 9101, 9102:
+		return "raw"
+	case 161, 162:
+		return "snmp"
+	case 137, 138, 139, 445:
+		return "smb"
+	case 3702, 5357, 5358:
+		return "wsd"
+	case 5353:
+		return "mdns"
+	}
+	return ""
+}
+
+// svcForPorts returns the recognized service for a flow, preferring the
+// destination port (the server side).
+func svcForPorts(sport, dport uint16) string {
+	if s := portService(dport); s != "" {
+		return s
+	}
+	return portService(sport)
+}
+
+// looksHTTP reports whether a reassembled stream begins like HTTP (a request
+// method or a response status line) — used to render printer API traffic as text.
+func looksHTTP(b []byte) bool {
+	for _, m := range []string{"GET ", "POST ", "PUT ", "HEAD ", "DELETE ", "OPTIONS ", "PATCH ", "HTTP/"} {
+		if len(b) >= len(m) && string(b[:len(m)]) == m {
+			return true
+		}
+	}
+	return false
 }
 
 // dissectSummary fills Src/Dst/Proto/Info/Class for one frame. No/Time/Len are
@@ -71,8 +120,13 @@ func dissectSummary(linkType int, frame []byte) packetSummary {
 		}
 		s.Src = netip.AddrPortFrom(src, sp).String()
 		s.Dst = netip.AddrPortFrom(dst, dp).String()
+		s.Sport, s.Dport = int(sp), int(dp)
+		s.Svc = svcForPorts(sp, dp)
 		fl := tcpFlagString(flags)
 		s.Info = fmt.Sprintf("%d → %d [%s] len=%d", sp, dp, fl, payload)
+		if s.Svc != "" {
+			s.Info += " ·" + s.Svc
+		}
 		switch {
 		case flags&tcpFlagRST != 0:
 			s.Class = "reset"
@@ -93,7 +147,12 @@ func dissectSummary(linkType int, frame []byte) packetSummary {
 			dp := uint16(l4[2])<<8 | uint16(l4[3])
 			s.Src = netip.AddrPortFrom(src, sp).String()
 			s.Dst = netip.AddrPortFrom(dst, dp).String()
+			s.Sport, s.Dport = int(sp), int(dp)
+			s.Svc = svcForPorts(sp, dp)
 			s.Info = fmt.Sprintf("%d → %d len=%d", sp, dp, len(l4)-8)
+			if s.Svc != "" {
+				s.Info += " ·" + s.Svc
+			}
 		} else {
 			s.Info = "truncated UDP"
 		}
@@ -220,6 +279,8 @@ func icmpErrorName(proto, typ byte) string {
 type captureFilter struct {
 	class  string // reset | syn | fin | error | data | other
 	proto  string // tcp | udp | icmp (matched case-insensitively as a prefix)
+	svc    string // http | https | ipp | raw | snmp | ... (recognized service)
+	port   int    // match flows with this source OR destination port (0 = any)
 	q      string // substring over src/dst/info/proto
 	offset int
 	limit  int
@@ -319,6 +380,12 @@ func captureMatch(s packetSummary, f captureFilter) bool {
 		return false
 	}
 	if f.proto != "" && !strings.HasPrefix(strings.ToLower(s.Proto), strings.ToLower(f.proto)) {
+		return false
+	}
+	if f.svc != "" && !strings.EqualFold(f.svc, s.Svc) {
+		return false
+	}
+	if f.port > 0 && s.Sport != f.port && s.Dport != f.port {
 		return false
 	}
 	if f.q != "" {

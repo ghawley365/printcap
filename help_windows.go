@@ -36,6 +36,7 @@ func showHelp() {
 					helpPage("Content (DLP)", helpDLP),
 					helpPage("Enterprise sources", helpEnterprise),
 					helpPage("Dashboard", helpDashboard),
+					helpPage("Packet capture", helpIntercept),
 					helpPage("Files & storage", helpStorage),
 					helpPage("Logging", helpLogging),
 					helpPage("Troubleshooting", helpTrouble),
@@ -580,6 +581,11 @@ WHAT IT SHOWS
 - Export: download the (filtered) job list as CSV or JSON.
 - Live log panel with a level filter and a live log-level control (change the
   running level without a restart).
+- Settings editor: edit EVERY config field from the browser and Save (or Save &
+  restart). Secrets show as *** and are kept if you don't change them. Writes are
+  refused from other machines unless dashboard.allow_remote_admin is set.
+- Captures: a packet window for intercept mode — live view, filtering, and TCP
+  stream reassembly (see the "Packet capture" tab).
 - Light / dark theme.
 
 DELETING JOBS
@@ -594,6 +600,50 @@ control the engine, so if you don't fully trust the network, bind printcap to
 port can view and download captures.
 `
 
+const helpIntercept = `NETWORK INTERCEPTION & PACKET CAPTURE
+
+Off by default. AUTHORIZED USE ONLY — this mode captures traffic that is NOT
+addressed to printcap. Use it only on networks you have written authorization to
+capture on. Misuse may be illegal.
+
+ENABLING
+- Run with -intercept (or set intercept.enabled in the config).
+- It REFUSES TO START until you record an authorization: acknowledge it and set
+  an operator name and an engagement/ticket reference
+  (-authorize -operator NAME -engagement TICKET). An optional expiry date stops
+  capture once the engagement window has passed. "printcap -check" reports any
+  missing or expired authorization as an error.
+- On Windows, live capture needs Npcap installed (npcap.com) and a build made
+  with the Npcap SDK (built with -tags=npcap). A plain build logs that capture is
+  unavailable and captures nothing. (macOS and Linux builds capture with no extra
+  driver — root / access_bpf / CAP_NET_RAW.)
+
+WHAT IT DOES
+- Writes ALL traffic on the capture interface to a standard capture.pcap in the
+  output folder (Wireshark/tshark can open it).
+- Reconstructs print AND API jobs from the traffic into typed files
+  (.pcl/.ps/.pdf/.jpg, and HTTP) on ports 9100, 515, 631, 80, and 8080.
+- Writes capture.pcap.authorization.txt next to the pcap recording WHO ran the
+  capture and under what engagement.
+
+ACTIVE ARP POSITIONING (Windows + Npcap only, optional)
+Stays OFF unless you list explicit target IPs — there is NO whole-subnet mode. It
+acts only on the hosts you list (and the gateway) and restores their ARP caches
+on stop. macOS/Linux capture is strictly passive (a read-only tap; no ARP).
+
+VIEWING CAPTURES — the Dashboard "Captures" window
+- GO LIVE: a real-time, scrolling packet view fed as packets arrive (pause /
+  clear / auto-scroll; shows "missed N" if a burst overruns the buffer).
+  "Refresh (static)" instead reads the saved pcap.
+- FILTER by free text, port, service (HTTP/EWS, HTTPS, IPP, raw/9100, LPR, SNMP,
+  SMB, WSD, mDNS), packet class (RST / ICMP error / SYN / FIN / data), and
+  protocol. Resets and ICMP errors are color-coded.
+- FOLLOW STREAM: click any TCP row to reassemble both directions (client->server
+  and server->client), viewable as text or hex. HTTP renders as text, so the
+  printer's WEB API (EWS/REST) and IPP exchanges are readable. Each direction and
+  the whole .pcap are downloadable.
+`
+
 const helpStorage = `FILES & STORAGE
 
 WHERE THINGS GO
@@ -601,7 +651,10 @@ WHERE THINGS GO
   matching .json metadata sidecar (and, for EBCDIC jobs, a -decoded.txt).
 - Spool folder: the forward-proxy retry queue (spool_retry items and their
   "dead/" give-ups) and temporary working files live here.
-- Logs: printcap.log (and the optional JSON-lines log) — see the Logging tab.
+- Logs: a "logs" subfolder of the output folder (printcap.log, plus the optional
+  JSON-lines log) — see the Logging tab. Logging defaults to verbose (trace).
+- Captures (intercept mode): capture.pcap and its authorization sidecar in the
+  output folder.
 
 PORTABLE BY DESIGN
 Relative folder paths resolve relative to the printcap EXECUTABLE, not the

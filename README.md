@@ -21,7 +21,8 @@ No runtime, no installer, no dependencies — one `printcap.exe`.
 | IPP | TCP 631 | IPP-over-HTTP; full driverless/IPP-Everywhere attribute set |
 | IPPS | TCP 6310 | IPP-over-TLS; self-signed cert generated in memory |
 | SNMP agent | UDP 161 | v1/v2c; answers Get/GetNext/GetBulk so scanners discover it as a printer |
-| Web dashboard | TCP 8631 | Live job feed, per-protocol stats, one-click downloads |
+| Web dashboard | TCP 8631 | Live job feed, per-protocol stats, one-click downloads, full settings editor |
+| Network interception | — | **Authorized-only**, off by default: full-segment packet capture to pcap + a live, filterable capture window with TCP stream reassembly (incl. printer HTTP/EWS API traffic). macOS/Linux capture needs no cgo/Npcap; Windows needs an Npcap build. |
 
 A single port can serve **both** IPP and IPPS by sniffing the TLS handshake — see `auto_tls`.
 
@@ -283,10 +284,19 @@ It binds to `bind` (default all interfaces) on the `dashboard` port (default
   dashboard while the engine bounces.)
 * **Live:** stats, listener status, and the log panel update over **SSE** (no
   polling), with a **light/dark theme** toggle and a **live log-level** control.
+* **Settings:** edit **every** config field from the browser and Save / Save &
+  restart. Secrets show as `***` and are preserved if left unchanged. Writes are
+  loopback-only unless `dashboard.allow_remote_admin` is set.
+* **Captures** (intercept mode): a packet window with a **live scrolling view**,
+  **filtering** (text / port / service / class / protocol, color-coded), and
+  **follow-stream TCP reassembly** (text/hex, HTTP rendered as text so printer
+  web-API and IPP exchanges are readable), plus a raw `.pcap` download.
 
 JSON / control API: `/api/stats`, `/api/jobs` (search/sort/page),
 `/api/job?id=N` (download), `/api/jobpreview?id=N`, `/api/jobdelete` (POST),
 `/api/export?format=csv|json`, `/api/listeners`, `/api/listener` (POST toggle),
+`/api/settings` (GET/POST), `/api/capture`, `/api/capture/live`,
+`/api/capture/stream`, `/api/capturefile`,
 `/api/control` (POST start/stop/restart), `/api/loglevel` (POST), `/api/events`
 (SSE), `/api/logs?level=debug&n=300`, `/api/logfile`, `/api/config`,
 `/api/version`.
