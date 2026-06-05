@@ -13,8 +13,10 @@ func serveRaw9100(ln net.Listener) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
+			logDebug("9100", "accept loop exiting: %v", err)
 			return
 		}
+		logTrace("9100", "accepted connection from %s", conn.RemoteAddr())
 		trackGo(func() { handleRaw9100(conn) })
 	}
 }

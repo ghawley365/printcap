@@ -103,6 +103,10 @@ func main() {
 	flag.Bool("mdns", true, "advertise the printer over mDNS/DNS-SD (Bonjour)")
 	flag.Bool("smb", false, "enable the experimental SMB print share")
 	flag.Bool("wsd", false, "enable the experimental WSD print service")
+	flag.Bool("intercept", false, "enable network interception & full-traffic pcap capture (authorized use only)")
+	flag.Bool("authorize", false, "attest you are authorized to capture on this network (required for -intercept)")
+	flag.String("operator", "", "operator name/handle recorded in the intercept authorization record")
+	flag.String("engagement", "", "engagement/ticket/SOW reference recorded in the intercept authorization record")
 	flag.Parse()
 
 	// -version: print the build version and exit before any heavy init.
@@ -169,6 +173,7 @@ func main() {
 	log.SetFlags(0)
 	log.SetOutput(stdLogWriter{})
 	logInfo("app", "%s starting (config %q, level %s)", versionString(), configFilePath, logger.Level())
+	logInfo("app", "paths: captures=%q spool=%q logs=%q logfile=%q", captureDir(), spoolDir(), logDir(), logger.LogFilePath())
 
 	// Surface config problems up-front so operators see *why* a listener may be
 	// missing. Non-fatal: the engine already skips listeners that fail to bind.
@@ -216,6 +221,12 @@ func printBanner(n int) {
 	}
 	if cfg.Dashboard.Enabled && cfg.Ports.Dashboard > 0 {
 		fmt.Printf("  dashboard  : http://%s:%d/\n", dashHost(), cfg.Ports.Dashboard)
+	}
+	if failures := engine.Failures(); len(failures) > 0 {
+		fmt.Println("  FAILED LISTENERS:")
+		for name, reason := range failures {
+			fmt.Printf("    - %s: %s\n", name, reason)
+		}
 	}
 	if n == 0 {
 		fmt.Println("  WARNING: no listeners started (check ports/permissions)")
@@ -274,6 +285,14 @@ func applyFlagOverrides() {
 			cfg.SMB.Enabled = true
 		case "wsd":
 			cfg.WSD.Enabled = true
+		case "intercept":
+			cfg.Intercept.Enabled = true
+		case "authorize":
+			cfg.Intercept.Authorization.Acknowledged = true
+		case "operator":
+			cfg.Intercept.Authorization.Operator = get()
+		case "engagement":
+			cfg.Intercept.Authorization.Engagement = get()
 		}
 	})
 }

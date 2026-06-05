@@ -1092,6 +1092,7 @@ func doSave(restart bool) {
 		msg += "\n\nWarnings:\n" + strings.Join(warnings, "\n")
 	}
 	walk.MsgBox(mw, "Saved", msg, walk.MsgBoxIconInformation)
+	reportBindFailures() // surface any listener that failed to bind on the restart
 	updateStatus()
 }
 
@@ -1102,9 +1103,14 @@ func onStartStop() {
 		}
 	} else {
 		applyUIToConfig()
-		_ = dumpConfig(configFilePath)
+		if err := dumpConfig(configFilePath); err != nil {
+			walk.MsgBox(mw, "Save failed", "Could not write the config file before starting:\n"+err.Error(), walk.MsgBoxIconError)
+			return
+		}
 		if err := engineStart(); err != nil {
 			walk.MsgBox(mw, "Start failed", err.Error(), walk.MsgBoxIconError)
+		} else {
+			reportBindFailures()
 		}
 	}
 	updateStatus()
@@ -1112,7 +1118,10 @@ func onStartStop() {
 
 func onInstall() {
 	applyUIToConfig()
-	_ = dumpConfig(configFilePath) // ensure the service has a config to read
+	if err := dumpConfig(configFilePath); err != nil { // the service reads this file
+		walk.MsgBox(mw, "Save failed", "Could not write the config file the service will read:\n"+err.Error(), walk.MsgBoxIconError)
+		return
+	}
 	if err := installService(); err != nil {
 		walk.MsgBox(mw, "Install failed", err.Error(), walk.MsgBoxIconError)
 	} else {
@@ -1168,6 +1177,27 @@ func engineStop() error {
 }
 
 // --- helpers ----------------------------------------------------------------
+
+// reportBindFailures pops a dialog listing any listeners that failed to bind on
+// the last in-process engine start, with the actionable guidance the engine
+// classified (port in use, privileged port, etc.). No-op when all listeners came
+// up, or when running as a Windows service (the SCM owns that process, so there
+// are no in-process failures to report here).
+func reportBindFailures() {
+	if mw == nil || serviceInstalled() {
+		return
+	}
+	f := engine.Failures()
+	if len(f) == 0 {
+		return
+	}
+	var b strings.Builder
+	b.WriteString("Some listeners did not start:\n\n")
+	for name, reason := range f {
+		fmt.Fprintf(&b, "• %s\n%s\n\n", name, reason)
+	}
+	walk.MsgBox(mw, "Listener problems", b.String(), walk.MsgBoxIconWarning)
+}
 
 func updateStatus() {
 	if mw == nil {

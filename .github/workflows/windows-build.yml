@@ -1,0 +1,79 @@
+name: Windows build (live capture / Npcap)
+
+# Builds the Windows binaries on a windows-latest runner. The npcap build links
+# gopacket against the Npcap SDK (cgo) — this is the only build that can capture
+# live traffic on Windows, and it can only be produced on Windows, so it lives in
+# CI rather than the cross-compile-from-mac dev loop.
+#
+# Run it manually from the Actions tab (workflow_dispatch) or by pushing a tag.
+# Artifacts: printcap.exe (live capture, -tags=npcap) and printcap-nocapture.exe
+# (default CGO-free build, everything except the live-capture driver).
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Derive version string
+        id: ver
+        shell: pwsh
+        run: |
+          $v = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { "1.0.0+$($env:GITHUB_SHA.Substring(0,7))" }
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "version = $v"
+
+      - name: Sanity build + tests (default, CGO-free)
+        shell: pwsh
+        env:
+          CGO_ENABLED: "0"
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          go vet ./...
+          go test ./...
+          go build -ldflags "-X main.version=$env:VERSION" -o printcap-nocapture.exe .
+
+      - name: Download Npcap SDK
+        shell: pwsh
+        run: |
+          $url = "https://npcap.com/dist/npcap-sdk-1.13.zip"
+          Invoke-WebRequest -Uri $url -OutFile npcap-sdk.zip
+          Expand-Archive -Path npcap-sdk.zip -DestinationPath "$env:GITHUB_WORKSPACE\npcap-sdk" -Force
+          Get-ChildItem -Recurse "$env:GITHUB_WORKSPACE\npcap-sdk" | Select-Object FullName | Out-Host
+
+      - name: Build live-capture binary (cgo + Npcap, -tags=npcap)
+        shell: pwsh
+        env:
+          CGO_ENABLED: "1"
+          # gopacket/pcap needs the Npcap SDK headers + x64 import libs. The
+          # windows-latest image ships MinGW gcc on PATH, which cgo uses.
+          CGO_CFLAGS: -I${{ github.workspace }}\npcap-sdk\Include
+          CGO_LDFLAGS: -L${{ github.workspace }}\npcap-sdk\Lib\x64
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          gcc --version
+          go build -tags npcap -ldflags "-X main.version=$env:VERSION" -o printcap.exe .
+          Get-Item printcap.exe | Select-Object Name,Length | Out-Host
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: printcap-windows
+          path: |
+            printcap.exe
+            printcap-nocapture.exe
+          if-no-files-found: error

@@ -124,8 +124,10 @@ func serveSNMP(pc net.PacketConn) {
 	for {
 		n, peer, err := pc.ReadFrom(buf)
 		if err != nil {
+			logDebug("SNMP", "receive loop exiting: %v", err)
 			return
 		}
+		logTrace("SNMP", "received %d bytes from %s", n, peer)
 		req := make([]byte, n)
 		copy(req, buf[:n])
 		if resp := handleSNMP(req, peer); resp != nil {
@@ -145,16 +147,19 @@ func handleSNMP(b []byte, peer net.Addr) []byte {
 	// version, community, pdu
 	_, verC, p, ok := readTLV(msg, 0)
 	if !ok {
+		logDebug("SNMP", "dropped packet from %s: cannot parse version", peer)
 		return nil
 	}
 	version := int(decodeInt(verC)) // 0 = v1, 1 = v2c, 3 = v3
 	if version == 3 {
 		if !cfg.SNMP.V3Enabled {
+			logDebug("SNMP", "dropped v3 request from %s: SNMPv3 not enabled", peer)
 			return nil
 		}
 		return handleSNMPv3(b)
 	}
 	if !cfg.SNMP.AllowV1V2c {
+		logDebug("SNMP", "dropped v%d request from %s: v1/v2c not allowed", version+1, peer)
 		return nil
 	}
 	_, commC, p2, ok := readTLV(msg, p)
@@ -162,7 +167,9 @@ func handleSNMP(b []byte, peer net.Addr) []byte {
 		return nil
 	}
 	if string(commC) != cfg.SNMP.Community {
-		logWarn("SNMP", "dropped request from %s: wrong community %q", peer, string(commC))
+		// Do NOT log the supplied community: it is a credential, and logging it
+		// would write secrets to disk and let a brute-force dump every guess.
+		logWarn("SNMP", "dropped request from %s: community mismatch (%d-byte value)", peer, len(commC))
 		return nil // wrong community: drop silently
 	}
 	pduTag, pdu, _, ok := readTLV(msg, p2)
@@ -268,8 +275,10 @@ func servePDU(pduTag byte, pdu []byte, version int, peer net.Addr) []byte {
 			}
 		}
 	case pduGetBulk:
-		nonRep := decodeInt(f2)
-		maxRep := decodeInt(f3)
+		// Clamp the attacker-supplied repetition counts to bound the response work
+		// (defense-in-depth; the loop also self-limits at end-of-MIB).
+		nonRep := clampInt(decodeInt(f2), 0, 256)
+		maxRep := clampInt(decodeInt(f3), 0, 1024)
 		for i, o := range oids {
 			if i < int(nonRep) {
 				if e, no := nextEntry(o); e != nil {
@@ -437,6 +446,17 @@ func uintContent(v uint64) []byte {
 		out = append([]byte{0x00}, out...)
 	}
 	return out
+}
+
+// clampInt bounds v to [lo, hi]. Used to tame attacker-supplied counts.
+func clampInt(v, lo, hi int64) int64 {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 func decodeInt(b []byte) int64 {

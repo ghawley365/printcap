@@ -11,3 +11,11 @@ printcap.log
 
 # macOS
 .DS_Store
+
+# Local backup/snapshot archives (not source).
+Archive.zip
+*.zip
+
+# Npcap SDK pulled in by the Windows CI build.
+npcap-sdk/
+npcap-sdk.zip

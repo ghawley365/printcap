@@ -113,6 +113,9 @@ func (p privProto) encrypt(privKey []byte, boots, time uint32, plain []byte) (ct
 	if _, err = rand.Read(salt); err != nil {
 		return nil, nil, err
 	}
+	if len(privKey) < p.keyLen {
+		return nil, nil, fmt.Errorf("usm: privacy key too short (%d < %d)", len(privKey), p.keyLen)
+	}
 	switch p.kind {
 	case "des":
 		key := privKey[:8]

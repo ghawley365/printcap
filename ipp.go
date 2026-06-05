@@ -44,6 +44,7 @@ const (
 func ippHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		// Browsers and health checks hit this with GET; answer plainly.
+		logTrace("IPP", "%s %s probe from %s", r.Method, r.URL.Path, r.RemoteAddr)
 		w.WriteHeader(http.StatusOK)
 		io.WriteString(w, "printcap IPP endpoint\n")
 		return
@@ -55,6 +56,7 @@ func ippHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	body, err := io.ReadAll(reader)
 	if err != nil || len(body) < 8 {
+		logWarn("IPP", "rejecting malformed request from %s: read err=%v len=%d", r.RemoteAddr, err, len(body))
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
@@ -91,6 +93,7 @@ func ippHandler(w http.ResponseWriter, r *http.Request) {
 		j.DocFormat = docFmt
 		j.data = docData
 		j.Bytes = len(docData)
+		logInfo(proto, "received %d-byte document (%s) from %s job=%q", len(docData), orElse(docFmt, "unknown"), r.RemoteAddr, j.JobName)
 		if err := sink.save(j); err != nil {
 			logWarn(proto, "forward (block) failed: %v", err)
 			status = 0x0508 // server-error-job-canceled

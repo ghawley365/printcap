@@ -72,7 +72,28 @@ const dashboardHTML = `<!doctype html>
   .kv .v{word-break:break-word;white-space:normal;}
   .dlp{color:var(--bad);font-weight:600;}
   .preview{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;background:var(--inbg);border:1px solid var(--line);border-radius:6px;padding:10px 12px;max-height:300px;overflow:auto;white-space:pre-wrap;}
-  @media(max-width:600px){.kv{grid-template-columns:1fr;}}
+  fieldset.setgrp{border:1px solid var(--border);border-radius:8px;margin:0 0 14px;padding:10px 14px 4px;}
+  fieldset.setgrp legend{color:var(--accent);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.04em;padding:0 6px;}
+  .setrow{display:grid;grid-template-columns:230px 1fr;gap:6px 14px;align-items:center;margin-bottom:8px;}
+  .setrow>label{color:var(--muted);font-size:13px;word-break:break-word;}
+  .setrow input[type=text],.setrow input[type=number]{width:100%;}
+  .setrow input[type=checkbox]{width:16px;height:16px;}
+  textarea.setjson{width:100%;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;background:var(--inbg);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:8px;resize:vertical;}
+  .setmsg{white-space:pre-wrap;margin-top:10px;padding:8px 12px;border-radius:6px;font-size:13px;}
+  .setmsg.ok{background:rgba(63,185,80,.12);color:var(--good);} .setmsg.err{background:rgba(248,81,73,.12);color:var(--bad);}
+  .lstat .reason{color:var(--bad);font-size:12px;flex-basis:100%;padding-left:20px;}
+  table.cap td{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;white-space:nowrap;}
+  table.cap tr[data-a]{cursor:pointer;}
+  table.cap tr[data-a]:hover td{background:var(--line);}
+  tr.cap-reset td{color:var(--bad);font-weight:600;}
+  tr.cap-error td{color:#e3b341;font-weight:600;}
+  tr.cap-syn td{color:var(--good);}
+  tr.cap-fin td{color:var(--muted);}
+  tr.cap-other td{color:var(--muted);}
+  .caplegend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;margin:0 0 10px;}
+  .caplegend span{display:inline-flex;align-items:center;gap:5px;}
+  .caplegend i{width:10px;height:10px;border-radius:2px;display:inline-block;}
+  @media(max-width:600px){.kv,.setrow{grid-template-columns:1fr;}}
 </style>
 </head>
 <body>
@@ -80,11 +101,69 @@ const dashboardHTML = `<!doctype html>
   <h1>printcap</h1>
   <span class="sub" id="printer"></span>
   <span class="spacer"></span>
+  <button id="captureBtn" title="view captured packets">Captures</button>
+  <button id="settingsBtn" title="edit all settings">Settings</button>
   <button id="refreshBtn" title="manual refresh">Refresh</button>
   <button id="themeBtn" title="toggle theme">Theme</button>
 </header>
 <main>
   <div class="cards" id="cards"></div>
+
+  <div class="panel" id="settingsPanel" style="display:none;">
+    <h2>Settings <span class="muted" id="settingsHint">— every config field; secrets show as *** (leave them to keep the stored value)</span></h2>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+      <button id="setSave">Save</button>
+      <button id="setSaveRestart">Save &amp; restart engine</button>
+      <button id="setReload">Reload</button>
+      <button id="setClose" class="danger">Close</button>
+      <span class="muted" style="align-self:center;">Saving while running restarts the engine and briefly drops this dashboard.</span>
+    </div>
+    <div id="settingsForm"><div class="empty">Loading settings…</div></div>
+    <div id="setMsg"></div>
+  </div>
+
+  <div class="panel" id="capturePanel" style="display:none;">
+    <h2>Network capture <span class="muted" id="capInfo"></span></h2>
+    <div class="caplegend">
+      <span><i style="background:var(--bad)"></i>reset (RST)</span>
+      <span><i style="background:#e3b341"></i>ICMP error</span>
+      <span><i style="background:var(--good)"></i>SYN (connect)</span>
+      <span><i style="background:var(--muted)"></i>FIN / other</span>
+      <span><i style="background:var(--fg)"></i>data</span>
+      <span class="muted">· click a TCP row to follow/reassemble its stream</span>
+    </div>
+    <div class="controls">
+      <input id="capQ" class="grow" placeholder="filter by IP, port, flag, info…">
+      <select id="capClass">
+        <option value="">all packets</option>
+        <option value="reset">resets (RST)</option>
+        <option value="error">ICMP errors</option>
+        <option value="syn">SYN (connect)</option>
+        <option value="fin">FIN (close)</option>
+        <option value="data">data</option>
+        <option value="other">other</option>
+      </select>
+      <select id="capProto">
+        <option value="">all protocols</option>
+        <option value="tcp">TCP</option>
+        <option value="udp">UDP</option>
+        <option value="icmp">ICMP</option>
+      </select>
+      <select id="capPageSize">
+        <option value="200">200 / page</option>
+        <option value="500" selected>500 / page</option>
+        <option value="1000">1000 / page</option>
+      </select>
+      <button id="capRefresh">Refresh</button>
+      <a class="dl" id="capDl" href="api/capturefile">⤓ pcap</a>
+    </div>
+    <div id="capTable"><div class="empty">Loading capture…</div></div>
+    <div class="pager">
+      <button id="capPrev">‹ Prev</button>
+      <button id="capNext">Next ›</button>
+      <span class="info" id="capPageInfo"></span>
+    </div>
+  </div>
 
   <div class="panel">
     <h2>Listeners</h2>
@@ -186,7 +265,8 @@ function renderListeners(ls){
       +'<span class="nm">'+esc(l.name)+'</span>'
       +'<span class="pt">'+(l.port>0?(':'+l.port):'—')+'</span>'
       +'<span class="muted">'+(l.disabled?'disabled':(l.up?'listening':'down'))+'</span>'
-      +'<span class="sp">'+btn+'</span></div>';
+      +'<span class="sp">'+btn+'</span>'
+      +(l.reason?'<span class="reason">⚠ '+esc(l.reason)+'</span>':'')+'</div>';
   }).join('');
   Array.prototype.forEach.call(document.querySelectorAll('#listeners button'),function(b){
     b.onclick=function(){
@@ -352,6 +432,206 @@ function startSSE(){
   es.onmessage=function(ev){try{renderStats(JSON.parse(ev.data));}catch(e){}};
   es.onerror=function(){/* browser auto-reconnects */};
 }
+
+// ---- network capture viewer ----
+var capState={q:'',cls:'',proto:'',offset:0,limit:500,matched:0};
+function loadCapture(){
+  var p=new URLSearchParams();
+  if(capState.q)p.set('q',capState.q);
+  if(capState.cls)p.set('class',capState.cls);
+  if(capState.proto)p.set('proto',capState.proto);
+  p.set('offset',capState.offset);p.set('limit',capState.limit);
+  fetch('api/capture?'+p.toString()).then(function(r){return r.json();}).then(function(d){
+    capState.matched=d.matched||0;renderCapture(d);
+  }).catch(function(e){document.getElementById('capTable').innerHTML='<div class="empty">Failed to load capture: '+esc(e)+'</div>';});
+}
+function renderCapture(d){
+  var info=document.getElementById('capInfo');
+  if(!d.total_parsed){
+    info.textContent='— '+esc(d.file||'no capture file')+' (empty; run intercept mode to capture traffic)';
+  }else{
+    info.textContent='— '+esc(d.file)+' · '+d.total_parsed+' packets parsed'+(d.truncated?' (capped)':'')+' · '+d.matched+' match filter';
+  }
+  var ps=d.packets||[];
+  if(!ps.length){
+    document.getElementById('capTable').innerHTML='<div class="empty">No packets match this filter.</div>';
+  }else{
+    var head='<table class="cap"><thead><tr><th>#</th><th>Time</th><th>Proto</th><th>Source</th><th>Destination</th><th>Len</th><th>Info</th></tr></thead><tbody>';
+    var rows=ps.map(function(x){
+      var follow=(x.proto==='TCP'&&x.src&&x.dst)?(' data-a="'+esc(x.src)+'" data-b="'+esc(x.dst)+'" title="click: follow TCP stream"'):'';
+      return '<tr class="cap-'+esc(x.class)+'"'+follow+'>'
+        +'<td>'+x.no+'</td><td>'+esc(x.time)+'</td><td>'+esc(x.proto)+'</td>'
+        +'<td>'+esc(x.src||'—')+'</td><td>'+esc(x.dst||'—')+'</td>'
+        +'<td>'+esc(x.len)+'</td><td>'+esc(x.info)+'</td></tr>';
+    }).join('');
+    document.getElementById('capTable').innerHTML=head+rows+'</tbody></table>';
+    Array.prototype.forEach.call(document.querySelectorAll('#capTable tr[data-a]'),function(tr){
+      tr.onclick=function(){openStream(tr.getAttribute('data-a'),tr.getAttribute('data-b'));};
+    });
+  }
+  var from=capState.matched?capState.offset+1:0;var to=Math.min(capState.offset+capState.limit,capState.matched);
+  document.getElementById('capPageInfo').textContent='showing '+from+'–'+to+' of '+capState.matched;
+  document.getElementById('capPrev').disabled=capState.offset<=0;
+  document.getElementById('capNext').disabled=capState.offset+capState.limit>=capState.matched;
+}
+document.getElementById('captureBtn').onclick=function(){
+  var p=document.getElementById('capturePanel');
+  if(p.style.display==='none'){p.style.display='';capState.offset=0;loadCapture();p.scrollIntoView({behavior:'smooth'});}
+  else{p.style.display='none';}
+};
+document.getElementById('capQ').addEventListener('input',function(){capState.q=this.value;capState.offset=0;
+  clearTimeout(window._cqt);window._cqt=setTimeout(loadCapture,250);});
+document.getElementById('capClass').addEventListener('change',function(){capState.cls=this.value;capState.offset=0;loadCapture();});
+document.getElementById('capProto').addEventListener('change',function(){capState.proto=this.value;capState.offset=0;loadCapture();});
+document.getElementById('capPageSize').addEventListener('change',function(){capState.limit=parseInt(this.value,10)||500;capState.offset=0;loadCapture();});
+document.getElementById('capRefresh').onclick=loadCapture;
+document.getElementById('capPrev').onclick=function(){capState.offset=Math.max(0,capState.offset-capState.limit);loadCapture();};
+document.getElementById('capNext').onclick=function(){if(capState.offset+capState.limit<capState.matched){capState.offset+=capState.limit;loadCapture();}};
+
+// ---- follow TCP stream (reassembly) ----
+function hexdump(b64){
+  if(!b64) return '<span class="muted">(no data this direction)</span>';
+  var bin; try{bin=atob(b64);}catch(e){return '(decode error)';}
+  var max=8192,n=Math.min(bin.length,max),out=[];
+  for(var i=0;i<n;i+=16){
+    var hex='',asc='';
+    for(var j=0;j<16;j++){
+      if(i+j<n){var c=bin.charCodeAt(i+j);hex+=('0'+c.toString(16)).slice(-2)+' ';asc+=(c>=32&&c<127)?bin[i+j]:'.';}
+      else{hex+='   ';}
+    }
+    out.push(('00000000'+i.toString(16)).slice(-8)+'  '+hex+' '+esc(asc));
+  }
+  var s=out.join('\n');
+  if(bin.length>max)s+='\n… '+(bin.length-max)+' more bytes (download the pcap for the full stream)';
+  return s;
+}
+function openStream(a,b){
+  fetch('api/capture/stream?a='+encodeURIComponent(a)+'&b='+encodeURIComponent(b))
+  .then(function(r){return r.json();}).then(function(d){
+    var html='<button class="close" id="modalClose">✕ close</button>'
+      +'<h3>Follow TCP stream</h3>'
+      +'<div class="muted">'+esc(a)+' ⇄ '+esc(b)+(d.capped?' · capped at 256 KiB/direction':'')+'</div>';
+    if(!d.a_to_b_len&&!d.b_to_a_len){
+      html+='<div class="empty">No reassembled payload for this flow (it may be control-only, or the data packets were not captured).</div>';
+    }else{
+      html+='<div style="margin-top:12px;color:var(--accent);font-weight:600;">▶ '+esc(a)+' → '+esc(b)+' (client → server, '+(d.a_to_b_len||0)+' bytes)</div>';
+      html+='<div class="preview">'+hexdump(d.a_to_b)+'</div>';
+      html+='<div style="margin-top:12px;color:var(--good);font-weight:600;">◀ '+esc(b)+' → '+esc(a)+' (server → client, '+(d.b_to_a_len||0)+' bytes)</div>';
+      html+='<div class="preview">'+hexdump(d.b_to_a)+'</div>';
+    }
+    document.getElementById('modal').innerHTML=html;
+    document.getElementById('overlay').classList.add('show');
+    document.getElementById('modalClose').onclick=closeDetail;
+  }).catch(function(e){setSettingsMsg&&0;alert('Follow stream failed: '+e);});
+}
+
+// ---- settings editor (full config parity) ----
+// A schema-free recursive renderer: nested objects become grouped fieldsets,
+// scalars become typed inputs (checkbox/number/text), and arrays / deep maps
+// become JSON textareas (mirroring how the native GUI edits list/map blocks).
+var origCfg=null;
+function elc(tag){return document.createElement(tag);}
+function labelFor(k){return k;}
+
+function node(path,label,v){
+  if(v!==null&&typeof v==='object'&&!Array.isArray(v)){
+    var fs=elc('fieldset');fs.className='setgrp';
+    var lg=elc('legend');lg.textContent=label;fs.appendChild(lg);
+    Object.keys(v).forEach(function(k){fs.appendChild(node(path?path+'.'+k:k,k,v[k]));});
+    return fs;
+  }
+  var row=elc('div');row.className='setrow';
+  var lab=elc('label');lab.textContent=label;lab.title=path;row.appendChild(lab);
+  var ctrl;
+  if(v!==null&&typeof v==='object'){ // array → JSON textarea
+    ctrl=elc('textarea');ctrl.className='setjson';
+    var txt=JSON.stringify(v,null,2);
+    ctrl.rows=Math.min(14,Math.max(2,txt.split('\n').length));ctrl.value=txt;ctrl.dataset.json='1';
+  }else if(typeof v==='boolean'){
+    ctrl=elc('input');ctrl.type='checkbox';ctrl.checked=v;
+  }else if(typeof v==='number'){
+    ctrl=elc('input');ctrl.type='number';ctrl.value=v;
+  }else{
+    ctrl=elc('input');ctrl.type='text';ctrl.value=(v==null?'':v);
+  }
+  ctrl.dataset.path=path;row.appendChild(ctrl);return row;
+}
+
+function buildSettingsForm(cfg){
+  var root=elc('div');
+  Object.keys(cfg).forEach(function(k){root.appendChild(node(k,k,cfg[k]));});
+  return root;
+}
+
+function loadSettings(){
+  setSettingsMsg('',false);
+  var host=document.getElementById('settingsForm');
+  host.innerHTML='<div class="empty">Loading settings…</div>';
+  fetch('api/settings').then(function(r){return r.json();}).then(function(cfg){
+    origCfg=cfg;host.innerHTML='';host.appendChild(buildSettingsForm(cfg));
+  }).catch(function(e){host.innerHTML='<div class="empty">Failed to load settings: '+esc(e)+'</div>';});
+}
+
+function setPath(obj,path,val){
+  var parts=path.split('.');var o=obj;
+  for(var i=0;i<parts.length-1;i++){
+    if(o[parts[i]]==null||typeof o[parts[i]]!=='object'){o[parts[i]]={};}
+    o=o[parts[i]];
+  }
+  o[parts[parts.length-1]]=val;
+}
+
+function collectSettings(){
+  if(!origCfg)throw 'settings not loaded';
+  var out=JSON.parse(JSON.stringify(origCfg));
+  var ctrls=document.getElementById('settingsForm').querySelectorAll('[data-path]');
+  for(var i=0;i<ctrls.length;i++){
+    var c=ctrls[i],p=c.dataset.path,val;
+    if(c.dataset.json==='1'){
+      try{val=JSON.parse(c.value);}catch(e){throw 'Invalid JSON in "'+p+'": '+e.message;}
+    }else if(c.type==='checkbox'){val=c.checked;}
+    else if(c.type==='number'){val=(c.value===''?0:Number(c.value));}
+    else{val=c.value;}
+    setPath(out,p,val);
+  }
+  return out;
+}
+
+function setSettingsMsg(msg,isErr){
+  var el=document.getElementById('setMsg');
+  if(!msg){el.innerHTML='';return;}
+  el.className='setmsg '+(isErr?'err':'ok');el.textContent=msg;
+}
+
+function saveSettings(restart){
+  var body;
+  try{body=collectSettings();}catch(e){setSettingsMsg(String(e),true);return;}
+  setSettingsMsg('Saving…',false);
+  fetch('api/settings?restart='+(restart?'true':'false'),{
+    method:'POST',headers:{'X-Requested-With':'printcap','Content-Type':'application/json'},body:JSON.stringify(body)
+  }).then(function(r){return r.json().then(function(d){return {ok:r.ok,d:d};});})
+  .then(function(res){
+    if(!res.ok||!res.d.ok){
+      var errs=(res.d&&res.d.errors)?res.d.errors.join('\n'):'save rejected';
+      setSettingsMsg('NOT saved — fix these and try again:\n'+errs,true);return;
+    }
+    var m='Saved to disk.'+(restart?' Engine restarting — this dashboard may drop briefly, then reload.':' (Not applied to the running engine until restart.)');
+    if(res.d.warnings&&res.d.warnings.length)m+='\n\nWarnings:\n'+res.d.warnings.join('\n');
+    setSettingsMsg(m,false);
+  }).catch(function(e){setSettingsMsg('Request failed: '+e+' (if you restarted, the dashboard is bouncing — wait a moment and refresh)',true);});
+}
+
+document.getElementById('settingsBtn').onclick=function(){
+  var p=document.getElementById('settingsPanel');
+  if(p.style.display==='none'){p.style.display='';loadSettings();p.scrollIntoView({behavior:'smooth'});}
+  else{p.style.display='none';}
+};
+document.getElementById('setReload').onclick=loadSettings;
+document.getElementById('setClose').onclick=function(){document.getElementById('settingsPanel').style.display='none';};
+document.getElementById('setSave').onclick=function(){saveSettings(false);};
+document.getElementById('setSaveRestart').onclick=function(){
+  if(confirm('Save and restart the engine? The dashboard will briefly drop.'))saveSettings(true);
+};
 
 loadStatsOnce();loadJobs();refreshLogs();startSSE();
 setInterval(refreshLogs,3000);

@@ -35,10 +35,14 @@ func captureDir() string { return resolveStorageDir(cfg.OutDir, "captures") }
 // spoolDir is the resolved directory for the forward retry queue and temp files.
 func spoolDir() string { return resolveStorageDir(cfg.Storage.SpoolDir, "spool") }
 
-// ensureStorageDirs creates the capture and spool directories (0o755). It never
-// deletes anything. Returns the first creation error.
+// logDir is the resolved directory where log files are written by default: a
+// "logs" subfolder of the capture directory, so all run artifacts live together.
+func logDir() string { return filepath.Join(captureDir(), "logs") }
+
+// ensureStorageDirs creates the capture, spool, and log directories (0o755). It
+// never deletes anything. Returns the first creation error.
 func ensureStorageDirs() error {
-	for _, d := range []string{captureDir(), spoolDir()} {
+	for _, d := range []string{captureDir(), spoolDir(), logDir()} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
 		}

@@ -570,6 +570,17 @@ Operational caveats to decide on for your environment:
 ## Scope / intent
 
 A capture/diagnostic tool for print-infrastructure testing and security
-assessment on networks you are authorized to test. It receives jobs sent to it
-and answers SNMP queries about itself; it does not intercept traffic destined
-elsewhere.
+assessment on networks you are authorized to test. By default it receives jobs
+sent to it and answers SNMP queries about itself; it does not intercept traffic
+destined elsewhere.
+
+An optional, off-by-default **network interception mode** can capture full-segment
+traffic to a pcap (and optionally position printcap on-path via ARP). It is for
+**authorized engagements only**: it refuses to start unless the operator records
+an explicit authorization (acknowledgement + operator + engagement reference), and
+active ARP positioning is fail-closed to an explicit target allow-list. Live
+capture works on **macOS** (BPF) and **Linux** (AF_PACKET) from a plain `go build`
+with no cgo/libpcap — just root or `access_bpf`/`CAP_NET_RAW`; on **Windows** it
+needs an Npcap build (`-tags=npcap`). Unix capture is a passive tap (active ARP is
+Windows-only). See the Administrator Guide, "Network interception", for the
+authorization model and risks.

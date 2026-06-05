@@ -107,18 +107,21 @@ type countingTransport struct {
 	calls     int
 	failFirst int
 	succeeded chan struct{}
+	closeOnce sync.Once
 }
 
 func (c *countingTransport) send(t *target, data []byte, j *job) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.calls++
-	if c.calls <= c.failFirst {
+	fail := c.calls <= c.failFirst
+	c.mu.Unlock()
+	if fail {
 		return errForward
 	}
+	// Close once on first success. The channel field is never reassigned (it's set
+	// at construction), so the test reading it in a select does not race this.
 	if c.succeeded != nil {
-		close(c.succeeded)
-		c.succeeded = nil
+		c.closeOnce.Do(func() { close(c.succeeded) })
 	}
 	return nil
 }

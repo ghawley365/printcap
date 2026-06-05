@@ -51,9 +51,15 @@ metadata (who, when, from where, in what format).
 | Web dashboard | TCP 8631 | HTTP (admin console) |
 
 **Intended use:** print-infrastructure testing, driver/queue validation, and
-authorized print-security assessment on networks you control. It receives jobs
-addressed to it and answers SNMP queries about itself — it does **not** sniff or
-intercept traffic destined for other devices.
+authorized print-security assessment on networks you control. In its default
+configuration it receives jobs addressed to it and answers SNMP queries about
+itself — it does **not** sniff or intercept traffic destined for other devices.
+
+> **Optional intercept mode.** A separate, off-by-default *network interception*
+> mode (Section 9a) can capture full-segment traffic to a pcap and, optionally,
+> position printcap on-path via ARP. It is gated behind an **enforced operator
+> authorization** and an explicit target allow-list, and is **only** for networks
+> you are authorized to capture on. See Section 9a before enabling it.
 
 ---
 
@@ -794,6 +800,79 @@ See §12.
 
 ---
 
+## 9a. Network interception & full-traffic capture (optional, authorized use only)
+
+> **Off by default. Authorized engagements only.** This mode captures traffic
+> **not** addressed to printcap and can position the host on-path. Use it only on
+> networks you have written authorization to capture on. Misuse may be illegal.
+
+Enabled with `-intercept` (or `intercept.enabled: true`). It operates a layer
+below the print listeners — it copies frames straight off the wire to a standard
+libpcap file (`out_dir/capture.pcap`) and, optionally, reconstructs print jobs
+from that traffic.
+
+### Build requirement & platforms
+
+| Platform | Backend | Build | Privilege |
+|---|---|---|---|
+| **macOS** | BPF (`/dev/bpf`) | plain `go build` (no cgo) | root, or membership in the `access_bpf` group |
+| **Linux** | AF_PACKET socket | plain `go build` (no cgo) | root, or `CAP_NET_RAW` |
+| **Windows** | Npcap | `CGO_ENABLED=1 go build -tags=npcap` (Npcap SDK) | Administrator + Npcap installed |
+
+On macOS and Linux a default `go build` produces a binary that captures — no
+cgo, no libpcap/Npcap. On Windows the live path needs the `-tags=npcap` build
+(a default Windows build compiles everything *except* the capture driver and
+logs that capture is unavailable). The rest of the feature — pcap file format,
+stream carving, dashboard viewer/reassembly — is platform-neutral.
+
+**macOS and Linux capture is passive (a read-only tap):** active ARP positioning
+is offered **only** on the Windows/Npcap build. On Unix, `intercept.arp` is
+ignored and the engine captures passively.
+
+### Enforced authorization (`intercept.authorization`)
+
+Intercept mode **refuses to start** unless an authorization record is present —
+this is a precondition, not a comment:
+
+| Field | Meaning |
+|---|---|
+| `acknowledged` | Operator attests they are authorized (also `-authorize`). Required `true`. |
+| `operator` | Who is running the capture (`-operator`). Required. |
+| `engagement` | Ticket / SOW reference granting authority (`-engagement`). Required. |
+| `expiry` | Optional `YYYY-MM-DD` or RFC3339; capture refuses to start once past. |
+
+`-check` reports any missing/expired authorization as a hard error. On start, a
+prominent banner is logged and a provenance sidecar (`capture.pcap.authorization.txt`)
+records who ran the capture, under what engagement, and when.
+
+### Stream carving (`intercept.carve`)
+
+Reconstructs print jobs from the captured traffic and feeds them through the same
+pipeline as the live listeners, so documents land as typed files (`.jpg`, `.pcl`,
+`.ps`, `.pdf`, …) **alongside** the raw pcap. On by default when intercept runs.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `enabled` | `true` | Reconstruct files from captured streams. |
+| `ports` | `[9100, 515, 631]` | Destination print ports to reassemble. |
+| `max_stream_mb` | `256` | Per-stream size cap. |
+| `idle_flush_sec` | `10` | Flush a stream idle this long. |
+
+### Active ARP positioning (`intercept.arp`) — fail-closed
+
+Optional on-path positioning. **There is no whole-subnet mode**: it acts only on
+an explicit `targets` allow-list of host IPs and restores every cache it touched
+on stop. With an empty `targets` list, positioning stays **off** regardless of
+`enabled` (capture-only). `-check` validates the target/gateway IPs.
+
+### Viewing captures
+
+The dashboard's **Captures** panel renders the pcap as a color-coded, filterable
+packet list (resets and ICMP errors highlighted; filter by class/protocol/text)
+and offers a raw `.pcap` download. See §12.
+
+---
+
 ## 10. Connecting print clients
 
 ### Windows
@@ -886,7 +965,17 @@ inspect, export, and prune captures, plus control listeners and the engine.
 * **Export** — download the (filtered) job list as **CSV** or **JSON**.
 * **Live log level** — change the running log level from the UI without a
   restart.
+* **Settings editor** — edit *every* config field from the browser (scalars as
+  inputs, list/map blocks as JSON), then **Save** or **Save & restart**. Secrets
+  display as `***` and are preserved if left unchanged. Writes are refused from
+  non-loopback clients unless `dashboard.allow_remote_admin` is set (see §14).
+* **Captures viewer** — when intercept mode (§9a) has produced a pcap, browse it
+  as a color-coded, filterable packet list (resets/ICMP errors highlighted;
+  filter by class/protocol/text) and download the raw `.pcap`.
 * **Light / dark theme** toggle.
+
+> **Note:** apply settings from *either* the native GUI *or* the web editor, not
+> both against the same running instance at the same moment.
 
 The dashboard keeps the **most recent 200 jobs** in memory for display; the full
 history lives on disk in the capture folder. Document bytes are **not** held in
@@ -931,6 +1020,16 @@ memory — previews and downloads stream from the saved file.
 > documents (the CSRF header is *not* an auth control). Bind it to a trusted
 > segment or loopback (`-bind 127.0.0.1`), disable it (`-dash 0`), or front it
 > with an authenticating reverse proxy if exposure is a concern. See §14.
+>
+> **Settings writes are loopback-only by default.** The settings editor's save
+> endpoint refuses requests that did not originate from the local machine unless
+> `dashboard.allow_remote_admin: true`. **Enabling that flag lets any host that
+> can reach the dashboard rewrite the entire configuration** — including output
+> paths, the forward-proxy targets (i.e. where captured jobs are sent), and the
+> service account — on an unauthenticated service. Leave it `false` unless the
+> dashboard is on a trusted, access-controlled segment. (Caveat: do not place a
+> reverse proxy on the same host as the dashboard — every proxied request then
+> appears to come from loopback and defeats this gate.)
 
 ---
 

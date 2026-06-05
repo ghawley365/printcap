@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // validationSeverity classifies a configIssue as a hard error or a warning.
@@ -52,6 +53,141 @@ func validateConfig(c *Config) []configIssue {
 	issues = append(issues, validateStorage(c)...)
 	issues = append(issues, validateBind(c)...)
 	issues = append(issues, validateDLP(c)...)
+	issues = append(issues, validateIntercept(c)...)
+	return issues
+}
+
+// parseAuthExpiry parses an authorization expiry stamp. It accepts RFC3339
+// ("2026-12-31T23:59:59Z") or a plain calendar date ("2026-12-31", interpreted as
+// end-of-day UTC so a same-day capture is still permitted). A blank string means
+// "no expiry" and returns the zero time with ok=true.
+func parseAuthExpiry(s string) (t time.Time, ok bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}, true
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, true
+	}
+	if d, err := time.Parse("2006-01-02", s); err == nil {
+		return d.Add(24*time.Hour - time.Second), true // end of that day, UTC
+	}
+	return time.Time{}, false
+}
+
+// validateIntercept enforces the authorization preconditions for the network
+// interception mode. Capture of all traffic — and especially active ARP poisoning
+// — is gated behind an explicit operator attestation so "authorized use only" is a
+// checked precondition, not just documentation. Disabled intercept config is not
+// scrutinized (you can carry an unused block in the file).
+func validateIntercept(c *Config) []configIssue {
+	if !c.Intercept.Enabled {
+		return nil
+	}
+	var issues []configIssue
+	a := c.Intercept.Authorization
+
+	if !a.Acknowledged {
+		issues = append(issues, configIssue{
+			Severity: sevError, Field: "intercept.authorization.acknowledged",
+			Message: "intercept mode is enabled but authorization is not acknowledged",
+			Fix:     "only on networks you are authorized to capture: set intercept.authorization.acknowledged=true (or pass -authorize) and record operator + engagement",
+		})
+	}
+	if strings.TrimSpace(a.Operator) == "" {
+		issues = append(issues, configIssue{
+			Severity: sevError, Field: "intercept.authorization.operator",
+			Message: "operator is blank",
+			Fix:     "set intercept.authorization.operator (or -operator) to the person/handle running the capture, for the audit record",
+		})
+	}
+	if strings.TrimSpace(a.Engagement) == "" {
+		issues = append(issues, configIssue{
+			Severity: sevError, Field: "intercept.authorization.engagement",
+			Message: "engagement reference is blank",
+			Fix:     "set intercept.authorization.engagement (or -engagement) to the ticket/SOW reference that grants capture authority",
+		})
+	}
+	if exp, ok := parseAuthExpiry(a.Expiry); !ok {
+		issues = append(issues, configIssue{
+			Severity: sevError, Field: "intercept.authorization.expiry",
+			Message: fmt.Sprintf("expiry %q is not a valid date", a.Expiry),
+			Fix:     "use RFC3339 (2026-12-31T23:59:59Z) or YYYY-MM-DD, or leave blank for no expiry",
+		})
+	} else if !exp.IsZero() && time.Now().After(exp) {
+		issues = append(issues, configIssue{
+			Severity: sevError, Field: "intercept.authorization.expiry",
+			Message: fmt.Sprintf("authorization expired at %s", exp.Format(time.RFC3339)),
+			Fix:     "renew the engagement window and update intercept.authorization.expiry before capturing",
+		})
+	}
+
+	// Carve enabled but with no ports reconstructs nothing — likely a mistake.
+	if c.Intercept.Carve.Enabled && len(c.Intercept.Carve.Ports) == 0 {
+		issues = append(issues, configIssue{
+			Severity: sevWarning, Field: "intercept.carve.ports",
+			Message: "stream carving is enabled but no ports are listed",
+			Fix:     "list the print ports to reconstruct (e.g. 9100, 515, 631), or set intercept.carve.enabled=false",
+		})
+	}
+
+	// Carve port values get the same range check named listeners get, so a typo
+	// (negative/0/>65535) is caught at -check rather than silently carving nothing.
+	for i, p := range c.Intercept.Carve.Ports {
+		if p < 1 || p > 65535 {
+			issues = append(issues, configIssue{
+				Severity: sevError, Field: fmt.Sprintf("intercept.carve.ports[%d]", i),
+				Message: fmt.Sprintf("port %d is out of range", p),
+				Fix:     "use a value between 1 and 65535",
+			})
+		}
+	}
+	// Non-negative numeric fields.
+	for _, n := range []struct {
+		field string
+		val   int
+	}{
+		{"intercept.carve.max_stream_mb", c.Intercept.Carve.MaxStreamMB},
+		{"intercept.carve.idle_flush_sec", c.Intercept.Carve.IdleFlushSec},
+		{"intercept.arp.interval_ms", c.Intercept.ARP.IntervalMS},
+		{"intercept.snaplen", c.Intercept.SnapLen},
+	} {
+		if n.val < 0 {
+			issues = append(issues, configIssue{
+				Severity: sevError, Field: n.field,
+				Message: fmt.Sprintf("%d is negative", n.val),
+				Fix:     "use a non-negative value (0 = default/unlimited)",
+			})
+		}
+	}
+
+	// Surface the runtime fail-closed behavior at check time too: ARP enabled with
+	// an empty allow-list captures nothing actively (no whole-subnet mode).
+	if c.Intercept.ARP.Enabled && len(c.Intercept.ARP.Targets) == 0 {
+		issues = append(issues, configIssue{
+			Severity: sevWarning, Field: "intercept.arp.targets",
+			Message: "arp.enabled is true but the target allow-list is empty",
+			Fix:     "list the specific victim IPs in intercept.arp.targets; with none, active poisoning stays OFF (capture-only)",
+		})
+	}
+	// Parse ARP target/gateway IPs at -check so a typo is caught before start
+	// (runtime validation is fail-closed but only fires when intercept actually runs).
+	for i, raw := range c.Intercept.ARP.Targets {
+		if net.ParseIP(strings.TrimSpace(raw)) == nil {
+			issues = append(issues, configIssue{
+				Severity: sevError, Field: fmt.Sprintf("intercept.arp.targets[%d]", i),
+				Message: fmt.Sprintf("%q is not a valid IP", raw),
+				Fix:     "use a literal IPv4/IPv6 address",
+			})
+		}
+	}
+	if g := strings.TrimSpace(c.Intercept.ARP.Gateway); g != "" && net.ParseIP(g) == nil {
+		issues = append(issues, configIssue{
+			Severity: sevError, Field: "intercept.arp.gateway",
+			Message: fmt.Sprintf("%q is not a valid IP", g),
+			Fix:     "use a literal gateway IP, or leave blank to auto-detect",
+		})
+	}
 	return issues
 }
 

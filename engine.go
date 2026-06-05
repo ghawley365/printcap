@@ -43,10 +43,12 @@ func (h httpCloser) Close() error {
 // all drive the same Engine, so capture behavior is identical no matter how the
 // tool is launched.
 type Engine struct {
-	mu      sync.Mutex
-	running bool
-	closers []io.Closer // listeners, packet conns, and *http.Server instances
-	active  []string    // human-readable names of the listeners that came up
+	mu       sync.Mutex
+	running  bool
+	closers  []io.Closer       // listeners, packet conns, and *http.Server instances
+	active   []string          // human-readable names of the listeners that came up
+	failures map[string]string // listener name -> actionable reason it failed to bind
+	stopping chan struct{}     // closed at the start of Stop() so long-poll/SSE loops exit promptly
 }
 
 var engine = &Engine{}
@@ -75,8 +77,9 @@ func setListenerDisabled(name string, off bool) {
 type listenerStatus struct {
 	Name     string `json:"name"`
 	Port     int    `json:"port"`
-	Up       bool   `json:"up"`       // currently bound/active this run
-	Disabled bool   `json:"disabled"` // turned off via the runtime override
+	Up       bool   `json:"up"`               // currently bound/active this run
+	Disabled bool   `json:"disabled"`         // turned off via the runtime override
+	Reason   string `json:"reason,omitempty"` // why it is down (bind failure guidance), if known
 }
 
 // listenerStatuses returns the configured listeners with their current state.
@@ -105,14 +108,19 @@ func listenerStatuses() []listenerStatus {
 		{"WSD", cfg.WSD.Port},
 		{"mDNS", 0},
 	}
+	failures := engine.Failures()
 	out := make([]listenerStatus, 0, len(defs))
 	for _, d := range defs {
-		out = append(out, listenerStatus{
+		st := listenerStatus{
 			Name:     d.name,
 			Port:     d.port,
 			Up:       active[d.name],
 			Disabled: listenerDisabled(d.name),
-		})
+		}
+		if !st.Up && !st.Disabled {
+			st.Reason = failures[d.name] // empty unless this listener failed to bind
+		}
+		out = append(out, st)
 	}
 	return out
 }
@@ -134,6 +142,8 @@ func (e *Engine) Start() (int, error) {
 	if err := ensureStorageDirs(); err != nil {
 		return 0, err
 	}
+	e.failures = map[string]string{} // fresh per run
+	e.stopping = make(chan struct{}) // fresh shutdown broadcast for this run
 	// (Re)initialize the capture sink and dashboard store for this run.
 	sink = &captureSink{dir: captureDir()}
 	store = newJobStore(200)
@@ -173,7 +183,7 @@ func (e *Engine) Start() (int, error) {
 		}
 		ln, err := net.Listen("tcp", bindAddr(port))
 		if err != nil {
-			e.logf("%s: %v", name, err)
+			e.bindFail(name, "tcp", port, err)
 			return false
 		}
 		e.closers = append(e.closers, ln)
@@ -189,7 +199,7 @@ func (e *Engine) Start() (int, error) {
 		}
 		ln, err := net.Listen("tcp", bindAddr(port))
 		if err != nil {
-			e.logf("%s: %v", name, err)
+			e.bindFail(name, "tcp", port, err)
 			return false
 		}
 		srv := hardenedServer("", h)
@@ -208,7 +218,7 @@ func (e *Engine) Start() (int, error) {
 		if tlsCfg, err := tlsConfig(); err != nil {
 			e.logf("IPP/IPPS: %v", err)
 		} else if ln, err := net.Listen("tcp", bindAddr(ports.AutoTLS)); err != nil {
-			e.logf("IPP/IPPS: %v", err)
+			e.bindFail("IPP/IPPS", "tcp", ports.AutoTLS, err)
 		} else {
 			e.closers = append(e.closers, ln)
 			e.active = append(e.active, "IPP/IPPS:"+itoa(ports.AutoTLS))
@@ -247,7 +257,7 @@ func (e *Engine) Start() (int, error) {
 
 	if cfg.SNMP.Enabled && ports.SNMP > 0 && !listenerDisabled("SNMP") {
 		if pc, err := net.ListenPacket("udp", bindAddr(ports.SNMP)); err != nil {
-			e.logf("SNMP: %v", err)
+			e.bindFail("SNMP", "udp", ports.SNMP, err)
 		} else {
 			buildMIB()
 			e.closers = append(e.closers, pc)
@@ -270,6 +280,24 @@ func (e *Engine) Start() (int, error) {
 		if w := startWSD(); w != nil {
 			e.closers = append(e.closers, w)
 		}
+	}
+
+	// Network interception & full-traffic capture. Operates a layer below the
+	// listeners (raw frames, not TCP streams), so it registers as a closer rather
+	// than an "active listener" port. Teardown order matters — the engine closes
+	// closers in order, and the interceptor's own Close restores ARP before
+	// forwarding, so it is safe wherever it sits in the slice.
+	if cfg.Intercept.Enabled && !listenerDisabled("intercept") {
+		if it, err := startInterceptor(cfg.Intercept); err != nil {
+			e.logf("intercept: %v", err)
+			interceptModule = nil
+		} else {
+			interceptModule = it
+			e.closers = append(e.closers, it)
+			e.active = append(e.active, "intercept")
+		}
+	} else {
+		interceptModule = nil
 	}
 
 	if cfg.MDNS.Enabled && !listenerDisabled("mDNS") {
@@ -316,6 +344,10 @@ func (e *Engine) Stop() {
 		e.mu.Unlock()
 		return
 	}
+	// Signal long-lived handlers (SSE /api/events) to return BEFORE we close the
+	// HTTP servers, so their graceful Shutdown doesn't block on the 5s timeout
+	// waiting for a never-idle streaming connection.
+	close(e.stopping)
 	for _, c := range e.closers {
 		_ = c.Close() // stops accept loops; Shutdown drains HTTP handlers
 	}
@@ -336,6 +368,21 @@ func (e *Engine) Running() bool {
 	return e.running
 }
 
+// Stopping returns a channel closed when the engine begins stopping. Long-lived
+// request handlers (the SSE stream) select on it to exit promptly instead of
+// blocking the graceful HTTP shutdown. Returns an already-closed channel if the
+// engine has never started.
+func (e *Engine) Stopping() <-chan struct{} {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.stopping == nil {
+		ch := make(chan struct{})
+		close(ch)
+		return ch
+	}
+	return e.stopping
+}
+
 // Active returns a copy of the active listener descriptions ("9100:9100", ...).
 func (e *Engine) Active() []string {
 	e.mu.Lock()
@@ -351,6 +398,34 @@ func (e *Engine) logf(format string, args ...interface{}) {
 	if engineLog != nil {
 		engineLog(msg)
 	}
+}
+
+// bindFail records and surfaces a listener bind failure with actionable guidance.
+// It is called only from within Start() (which holds e.mu), so writing e.failures
+// here needs no extra locking. The message is logged at ERROR so it is visible at
+// any log level, mirrored to the GUI hook, and stored for the dashboard/console.
+func (e *Engine) bindFail(name, proto string, port int, err error) {
+	msg := classifyListenErr(name, proto, port, err)
+	logErr("engine", "%s", msg)
+	if engineLog != nil {
+		engineLog(msg)
+	}
+	if e.failures == nil {
+		e.failures = map[string]string{}
+	}
+	e.failures[name] = msg
+}
+
+// Failures returns a copy of the per-listener bind-failure reasons from the most
+// recent Start(), keyed by listener name. Empty when every listener came up.
+func (e *Engine) Failures() map[string]string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make(map[string]string, len(e.failures))
+	for k, v := range e.failures {
+		out[k] = v
+	}
+	return out
 }
 
 // localAddrs returns the IPv4 and IPv6 addresses to advertise. A specific bind

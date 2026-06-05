@@ -1,16 +1,26 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/csv"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// secretSentinel is the placeholder the settings API substitutes for every
+// secret it returns (SNMP community, USM/SMB passwords, TLS key/cert paths,
+// service password). On save, a field still equal to the sentinel means "keep the
+// stored value", so the unauthenticated dashboard never has to reveal a secret to
+// round-trip the rest of the config.
+const secretSentinel = "***"
 
 // dashboardHandler builds the live web UI and its JSON API on its own HTTP mux
 // so it never collides with the IPP endpoint.
@@ -20,6 +30,10 @@ func dashboardHandler() http.Handler {
 	mux.HandleFunc("/api/stats", apiStats)
 	mux.HandleFunc("/api/jobs", apiJobs)
 	mux.HandleFunc("/api/config", apiConfig)
+	mux.HandleFunc("/api/settings", apiSettings)
+	mux.HandleFunc("/api/capture", apiCapture)
+	mux.HandleFunc("/api/capturefile", apiCaptureFile)
+	mux.HandleFunc("/api/capture/stream", apiCaptureStream)
 	mux.HandleFunc("/api/job", apiJobData)
 	mux.HandleFunc("/api/jobpreview", apiJobPreview)
 	mux.HandleFunc("/api/jobdelete", apiJobDelete)
@@ -55,6 +69,97 @@ func apiLogFile(w http.ResponseWriter, r *http.Request) {
 	defer f.Close()
 	safeServeHeaders(w)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+filepath.Base(path)+"\"")
+	http.ServeContent(w, r, filepath.Base(path), time.Time{}, f)
+}
+
+// apiCapture returns a filtered, paginated view of the interceptor's pcap as
+// per-packet summaries the UI color-codes (resets/ICMP errors highlighted). It is
+// read-only and safe over the unauthenticated dashboard. If capture has never run
+// (no pcap file), it returns an empty result rather than an error.
+func apiCapture(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	q := r.URL.Query()
+	f := captureFilter{
+		class:  q.Get("class"),
+		proto:  q.Get("proto"),
+		q:      q.Get("q"),
+		offset: atoiDefault(q.Get("offset"), 0),
+		limit:  atoiDefault(q.Get("limit"), 500),
+	}
+	if f.limit <= 0 || f.limit > 5000 {
+		f.limit = 500
+	}
+	path := interceptPcapPath(cfg.Intercept)
+	res, err := capturePackets(path, f)
+	if err != nil {
+		if os.IsNotExist(err) {
+			writeJSON(w, &captureResult{File: filepath.Base(path), Packets: []packetSummary{}})
+			return
+		}
+		http.Error(w, "cannot read capture: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if res.Packets == nil {
+		res.Packets = []packetSummary{}
+	}
+	writeJSON(w, res)
+}
+
+// apiCaptureStream reassembles both directions of the TCP conversation between
+// two endpoints (?a=ip:port&b=ip:port) from the captured pcap and returns each
+// half-stream base64-encoded (capped) for the viewer's "follow stream" feature.
+func apiCaptureStream(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	a, err := netip.ParseAddrPort(r.URL.Query().Get("a"))
+	if err != nil {
+		http.Error(w, "bad 'a' endpoint (want ip:port)", http.StatusBadRequest)
+		return
+	}
+	b, err := netip.ParseAddrPort(r.URL.Query().Get("b"))
+	if err != nil {
+		http.Error(w, "bad 'b' endpoint (want ip:port)", http.StatusBadRequest)
+		return
+	}
+	path := interceptPcapPath(cfg.Intercept)
+	ab, ba, parsed, ferr := followStream(path, a, b)
+	if ferr != nil {
+		if os.IsNotExist(ferr) {
+			writeJSON(w, map[string]interface{}{"a": a.String(), "b": b.String(), "a_to_b_len": 0, "b_to_a_len": 0})
+			return
+		}
+		http.Error(w, "cannot read capture: "+ferr.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]interface{}{
+		"a":          a.String(),
+		"b":          b.String(),
+		"a_to_b_len": len(ab),
+		"b_to_a_len": len(ba),
+		"a_to_b":     base64.StdEncoding.EncodeToString(ab),
+		"b_to_a":     base64.StdEncoding.EncodeToString(ba),
+		"capped":     len(ab) >= maxFollowBytes || len(ba) >= maxFollowBytes,
+		"parsed":     parsed,
+	})
+}
+
+// apiCaptureFile streams the raw interceptor pcap as a download.
+func apiCaptureFile(w http.ResponseWriter, r *http.Request) {
+	path := interceptPcapPath(cfg.Intercept)
+	f, err := os.Open(path)
+	if err != nil {
+		http.Error(w, "no capture file yet (run intercept mode first)", http.StatusNotFound)
+		return
+	}
+	defer f.Close()
+	safeServeHeaders(w)
+	w.Header().Set("Content-Type", "application/vnd.tcpdump.pcap")
 	w.Header().Set("Content-Disposition", "attachment; filename=\""+filepath.Base(path)+"\"")
 	http.ServeContent(w, r, filepath.Base(path), time.Time{}, f)
 }
@@ -345,6 +450,19 @@ func apiControl(w http.ResponseWriter, r *http.Request) {
 // cycle (engineAction → Start → dashboardHandler → apiControl → engineAction).
 var engineAction func(action string)
 
+// applyConfigAsync swaps in an edited config and persists it, in a detached
+// goroutine. It mirrors the GUI's stop-before-mutate discipline: the engine is
+// stopped FIRST so every handler goroutine that reads the global cfg has drained
+// before cfg is reassigned (otherwise the swap would be a data race), then the
+// config is written to disk, logging is reconfigured (level/path may have
+// changed), and the engine is brought back up. A package var so tests can stub it
+// (a real apply would bind ports and rewrite the config file).
+//
+// Caveat: the native Windows GUI mutates the same global cfg on its UI thread.
+// Do not drive settings changes from the GUI and the web editor against the same
+// running instance simultaneously — apply from one surface at a time.
+var applyConfigAsync func(nc *Config, restart bool)
+
 func init() {
 	engineAction = func(action string) {
 		go func() {
@@ -355,6 +473,22 @@ func init() {
 				engine.Start()
 			case "restart":
 				engine.Stop()
+				engine.Start()
+			}
+		}()
+	}
+	applyConfigAsync = func(nc *Config, restart bool) {
+		go func() {
+			wasRunning := engine.Running()
+			if wasRunning {
+				engine.Stop() // drains all readers of cfg before we swap it
+			}
+			cfg = nc
+			if err := dumpConfig(configFilePath); err != nil {
+				logErr("dashboard", "saving config to %s failed: %v", configFilePath, err)
+			}
+			configureLogging() // pick up any log level / path / sink changes
+			if wasRunning || restart {
 				engine.Start()
 			}
 		}()
@@ -443,12 +577,15 @@ func apiEvents(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}
 	send()
+	stopping := engine.Stopping()
 	ticker := time.NewTicker(1500 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-stopping:
+			return // engine is bouncing; exit now so Shutdown isn't blocked
 		case <-ticker.C:
 			send()
 		}
@@ -467,17 +604,17 @@ func apiConfig(w http.ResponseWriter, r *http.Request) {
 func redactedConfig() *Config {
 	c := *cfg
 	if c.SNMP.Community != "" {
-		c.SNMP.Community = "***"
+		c.SNMP.Community = secretSentinel
 	}
 	if len(c.SNMP.Users) > 0 {
 		us := make([]SNMPUser, len(c.SNMP.Users))
 		copy(us, c.SNMP.Users)
 		for i := range us {
 			if us[i].AuthPass != "" {
-				us[i].AuthPass = "***"
+				us[i].AuthPass = secretSentinel
 			}
 			if us[i].PrivPass != "" {
-				us[i].PrivPass = "***"
+				us[i].PrivPass = secretSentinel
 			}
 		}
 		c.SNMP.Users = us
@@ -487,17 +624,157 @@ func redactedConfig() *Config {
 		copy(us, c.SMB.Users)
 		for i := range us {
 			if us[i].Password != "" {
-				us[i].Password = "***"
+				us[i].Password = secretSentinel
 			}
 		}
 		c.SMB.Users = us
 	}
-	c.TLS.CertFile = ""
-	c.TLS.KeyFile = ""
+	// TLS paths are not secrets but can leak filesystem layout; mask the presence
+	// with the sentinel so the settings editor can round-trip them unchanged.
+	if c.TLS.CertFile != "" {
+		c.TLS.CertFile = secretSentinel
+	}
+	if c.TLS.KeyFile != "" {
+		c.TLS.KeyFile = secretSentinel
+	}
 	if c.Service.Password != "" {
-		c.Service.Password = "***"
+		c.Service.Password = secretSentinel
 	}
 	return &c
+}
+
+// apiSettings serves the full effective config for editing (GET, secrets masked
+// with the sentinel) and applies an edited config (POST). Writes are guarded by
+// the CSRF header and, unless dashboard.allow_remote_admin is set, restricted to
+// requests from the local machine — the dashboard is unauthenticated, so letting
+// a remote client rewrite the config (output paths, forward targets, service
+// account) would be a privilege-escalation vector.
+func apiSettings(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, redactedConfig())
+	case http.MethodPost:
+		if !csrfGuard(w, r) {
+			return
+		}
+		if !cfg.Dashboard.AllowRemoteAdmin && !isLoopbackRequest(r) {
+			http.Error(w, "settings can only be changed from the local machine (set dashboard.allow_remote_admin=true to permit remote changes)", http.StatusForbidden)
+			return
+		}
+		body, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
+		if err != nil {
+			http.Error(w, "could not read request body", http.StatusBadRequest)
+			return
+		}
+		// Start from the current config so any key the editor omits keeps its
+		// value, then overlay the posted JSON and restore any masked secrets.
+		nc := *cfg
+		if err := json.Unmarshal(body, &nc); err != nil {
+			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		mergeSecrets(&nc, cfg)
+
+		issues := validateConfig(&nc)
+		if hasErrors(issues) {
+			var errs []string
+			for _, is := range issues {
+				if is.Severity == sevError {
+					errs = append(errs, is.String())
+				}
+			}
+			w.WriteHeader(http.StatusBadRequest)
+			writeJSON(w, map[string]interface{}{"ok": false, "errors": errs})
+			return
+		}
+		var warnings []string
+		for _, is := range issues {
+			if is.Severity == sevWarning {
+				warnings = append(warnings, is.String())
+			}
+		}
+		restart := r.URL.Query().Get("restart") == "true"
+		logInfo("dashboard", "settings updated via web from %s (restart=%v)", r.RemoteAddr, restart)
+		writeJSON(w, map[string]interface{}{"ok": true, "warnings": warnings})
+		applyConfigAsync(&nc, restart)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// isLoopbackRequest reports whether the request came from the local machine.
+func isLoopbackRequest(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// mergeSecrets restores secret fields the editor left as the sentinel (meaning
+// "unchanged") from the current config, so a round-trip never blanks a secret the
+// dashboard masked. New slices are allocated so cur is never mutated.
+func mergeSecrets(nc, cur *Config) {
+	if nc.SNMP.Community == secretSentinel {
+		nc.SNMP.Community = cur.SNMP.Community
+	}
+	if len(nc.SNMP.Users) > 0 {
+		us := make([]SNMPUser, len(nc.SNMP.Users))
+		copy(us, nc.SNMP.Users)
+		for i := range us {
+			if us[i].AuthPass == secretSentinel {
+				us[i].AuthPass = snmpSecret(cur, us[i].Name, true)
+			}
+			if us[i].PrivPass == secretSentinel {
+				us[i].PrivPass = snmpSecret(cur, us[i].Name, false)
+			}
+		}
+		nc.SNMP.Users = us
+	}
+	if len(nc.SMB.Users) > 0 {
+		us := make([]SMBUser, len(nc.SMB.Users))
+		copy(us, nc.SMB.Users)
+		for i := range us {
+			if us[i].Password == secretSentinel {
+				us[i].Password = smbSecret(cur, us[i].User)
+			}
+		}
+		nc.SMB.Users = us
+	}
+	if nc.TLS.CertFile == secretSentinel {
+		nc.TLS.CertFile = cur.TLS.CertFile
+	}
+	if nc.TLS.KeyFile == secretSentinel {
+		nc.TLS.KeyFile = cur.TLS.KeyFile
+	}
+	if nc.Service.Password == secretSentinel {
+		nc.Service.Password = cur.Service.Password
+	}
+}
+
+// snmpSecret returns the stored auth (auth=true) or priv passphrase for the named
+// SNMPv3 user in cur, or "" if not found.
+func snmpSecret(cur *Config, name string, auth bool) string {
+	for _, u := range cur.SNMP.Users {
+		if u.Name == name {
+			if auth {
+				return u.AuthPass
+			}
+			return u.PrivPass
+		}
+	}
+	return ""
+}
+
+// smbSecret returns the stored password for the named SMB user in cur, or "".
+func smbSecret(cur *Config, user string) string {
+	for _, u := range cur.SMB.Users {
+		if u.User == user {
+			return u.Password
+		}
+	}
+	return ""
 }
 
 // apiJobData streams a captured spool file back to the browser as a download.

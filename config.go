@@ -29,28 +29,91 @@ const (
 // defaultConfig(); a -config file overlays onto them; explicit flags override
 // last. Use -dump-config to write the effective config as a template to edit.
 type Config struct {
-	Bind          string      `json:"bind"`          // interface to bind all listeners to
-	Ports         Ports       `json:"ports"`         // 0 disables a given listener
-	Save          string      `json:"save"`          // both | raw | meta
-	OutDir        string      `json:"out_dir"`       // capture output directory
-	MaxJobMB      int         `json:"max_job_mb"`    // per-job byte cap (0 = unlimited)
-	Notifications bool        `json:"notifications"` // GUI: show a tray balloon after each capture
-	TLS           TLSConf     `json:"tls"`
-	Raw           RawOpts     `json:"raw"`
-	LPD           LPDOpts     `json:"lpd"`
-	IPPOpts       IPPOpts     `json:"ipp_options"`
-	Printer       Printer     `json:"printer"`
-	SNMP          SNMPConf    `json:"snmp"`
-	Dashboard     DashConf    `json:"dashboard"`
-	MDNS          MDNSConf    `json:"mdns"`
-	Log           LogConf     `json:"log"`
-	Forward       ForwardConf `json:"forward"`
-	EBCDIC        EBCDICConf  `json:"ebcdic"`
-	SMB           SMBConf     `json:"smb"`
-	WSD           WSDConf     `json:"wsd"`
-	Storage       StorageConf `json:"storage"`
-	DLP           DLPConf     `json:"dlp"`
-	Service       ServiceConf `json:"service"`
+	Bind          string        `json:"bind"`          // interface to bind all listeners to
+	Ports         Ports         `json:"ports"`         // 0 disables a given listener
+	Save          string        `json:"save"`          // both | raw | meta
+	OutDir        string        `json:"out_dir"`       // capture output directory
+	MaxJobMB      int           `json:"max_job_mb"`    // per-job byte cap (0 = unlimited)
+	Notifications bool          `json:"notifications"` // GUI: show a tray balloon after each capture
+	TLS           TLSConf       `json:"tls"`
+	Raw           RawOpts       `json:"raw"`
+	LPD           LPDOpts       `json:"lpd"`
+	IPPOpts       IPPOpts       `json:"ipp_options"`
+	Printer       Printer       `json:"printer"`
+	SNMP          SNMPConf      `json:"snmp"`
+	Dashboard     DashConf      `json:"dashboard"`
+	MDNS          MDNSConf      `json:"mdns"`
+	Log           LogConf       `json:"log"`
+	Forward       ForwardConf   `json:"forward"`
+	EBCDIC        EBCDICConf    `json:"ebcdic"`
+	SMB           SMBConf       `json:"smb"`
+	WSD           WSDConf       `json:"wsd"`
+	Intercept     InterceptConf `json:"intercept"`
+	Storage       StorageConf   `json:"storage"`
+	DLP           DLPConf       `json:"dlp"`
+	Service       ServiceConf   `json:"service"`
+}
+
+// InterceptConf configures the network interception & full-traffic capture mode
+// (the transparent on-path tap). This operates a layer below the print
+// listeners: it copies frames straight off the wire to a libpcap file and,
+// optionally, actively positions printcap on-path via ARP poisoning.
+//
+// IMPORTANT — this mode is for use only on networks you are authorized to
+// capture on. The ARP sub-module manipulates other hosts' ARP caches and must
+// be scoped to an explicit target allow-list; an empty allow-list disables
+// active poisoning even when ARP.Enabled is true (fail-closed by default).
+type InterceptConf struct {
+	Enabled     bool   `json:"enabled"`
+	Interface   string `json:"interface"`   // capture NIC: Npcap device name or friendly name; blank = auto
+	PcapFile    string `json:"pcap_file"`   // output libpcap path; blank = "<out_dir>/capture.pcap"
+	BPF         string `json:"bpf"`         // optional libpcap capture filter ("" = everything)
+	SnapLen     int    `json:"snaplen"`     // bytes captured per frame (0 = full frame)
+	Promiscuous bool   `json:"promiscuous"` // put the NIC in promiscuous mode
+	IPForward   bool   `json:"ip_forward"`  // enable OS IP forwarding while active (restored on stop)
+
+	Authorization AuthorizationConf `json:"authorization"`
+	Carve         CarveConf         `json:"carve"`
+	ARP           ARPConf           `json:"arp"`
+}
+
+// CarveConf controls reconstruction of print jobs from the captured traffic.
+// When enabled, the interceptor reassembles client->printer TCP streams on the
+// listed print ports and feeds each completed stream through the same pipeline as
+// the live listeners (detectPDL/extForFormat + the capture sink), so documents
+// land as typed files (.jpg, .pcl, .ps, .pdf, …) in addition to the raw pcap.
+type CarveConf struct {
+	Enabled      bool  `json:"enabled"`        // reconstruct files from captured streams
+	Ports        []int `json:"ports"`          // print ports to reassemble (dst port)
+	MaxStreamMB  int   `json:"max_stream_mb"`  // per-stream memory/size cap (0 = unlimited)
+	IdleFlushSec int   `json:"idle_flush_sec"` // flush a stream idle this long (0 = only on FIN/RST/stop)
+}
+
+// AuthorizationConf records the operator's attestation that they are permitted to
+// capture on the target network. It is ENFORCED, not advisory: intercept mode
+// refuses to start unless Acknowledged is true and both Operator and Engagement
+// are set (see validateIntercept / authorizeIntercept). These details are stamped
+// into a provenance sidecar beside every pcap, so each capture carries a record of
+// who ran it and under what authority — turning "authorized use only" from a
+// comment into a precondition.
+type AuthorizationConf struct {
+	Acknowledged bool   `json:"acknowledged"` // operator attests they are authorized to capture on this network
+	Operator     string `json:"operator"`     // who is running the capture (name/handle), for the audit record
+	Engagement   string `json:"engagement"`   // engagement / ticket / SOW reference granting authority
+	Expiry       string `json:"expiry"`       // optional; RFC3339 or YYYY-MM-DD. Refuse to start once past.
+}
+
+// ARPConf controls the optional active on-path positioning via ARP cache
+// poisoning. Targets is a REQUIRED scope allow-list of victim IPs; printcap
+// poisons only those hosts (and the gateway, bidirectionally) and restores
+// every cache it touched on stop. With an empty Targets list, poisoning stays
+// off regardless of Enabled — there is no "poison the whole subnet" mode.
+type ARPConf struct {
+	Enabled       bool     `json:"enabled"`
+	Gateway       string   `json:"gateway"`         // gateway IP to impersonate; blank = auto-detect default route
+	Targets       []string `json:"targets"`         // REQUIRED allow-list of victim IPs (scope control)
+	IntervalMS    int      `json:"interval_ms"`     // re-poison cadence (0 = default 2000ms)
+	RestoreOnStop bool     `json:"restore_on_stop"` // re-broadcast real MACs on teardown (default true)
 }
 
 // ServiceConf configures the installed Windows service. Blank Account = the
@@ -237,6 +300,10 @@ type SNMPUser struct {
 
 type DashConf struct {
 	Enabled bool `json:"enabled"`
+	// AllowRemoteAdmin permits changing settings from a non-loopback client.
+	// Default false: the settings-write API refuses connections that did not come
+	// from the local machine, since the dashboard is unauthenticated.
+	AllowRemoteAdmin bool `json:"allow_remote_admin"`
 }
 
 // MDNSConf drives the built-in mDNS/DNS-SD (Bonjour) responder that makes
@@ -389,6 +456,34 @@ func defaultConfig() *Config {
 			Port:      3911,
 			Discovery: true,
 		},
+		Intercept: InterceptConf{
+			Enabled:     false,
+			Interface:   "",
+			PcapFile:    "",
+			BPF:         "",
+			SnapLen:     0,
+			Promiscuous: true,
+			IPForward:   true,
+			Authorization: AuthorizationConf{
+				Acknowledged: false, // must be set explicitly per engagement; no implicit consent
+				Operator:     "",
+				Engagement:   "",
+				Expiry:       "",
+			},
+			Carve: CarveConf{
+				Enabled:      true,                  // on by default so intercept yields typed files, not just a pcap
+				Ports:        []int{9100, 515, 631}, // raw/JetDirect, LPR/LPD, IPP
+				MaxStreamMB:  256,
+				IdleFlushSec: 10,
+			},
+			ARP: ARPConf{
+				Enabled:       false,
+				Gateway:       "",
+				Targets:       []string{},
+				IntervalMS:    2000,
+				RestoreOnStop: true,
+			},
+		},
 		Storage: StorageConf{SpoolDir: ""}, // empty = <exe-dir>/spool
 		Service: ServiceConf{},
 		DLP: DLPConf{
@@ -402,14 +497,14 @@ func defaultConfig() *Config {
 			Targets: []ForwardTarget{},
 		},
 		Log: LogConf{
-			Level:      "info",
+			Level:      "trace", // extra-verbose by default; lower it in config or with -loglevel
 			File:       "",
 			Format:     "text",
 			JSONFile:   "",
 			MaxSizeMB:  10,
 			MaxBackups: 5,
 			Console:    true,
-			Protocol:   false,
+			Protocol:   true, // promote per-connection protocol detail to INFO by default
 			EventLog:   true,
 			Syslog: SyslogConf{
 				Enabled:  false,
@@ -436,11 +531,16 @@ func loadConfig(path string) error {
 // dumpConfig writes the effective config as pretty JSON to path (or stdout when
 // path is "-").
 func dumpConfig(path string) error {
-	b, _ := json.MarshalIndent(cfg, "", "  ")
+	b, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
 	b = append(b, '\n')
 	if path == "-" || path == "" {
 		_, err := os.Stdout.Write(b)
 		return err
 	}
-	return os.WriteFile(path, b, 0o644)
+	// 0o600: the config holds secrets (SNMP community, USM/SMB passwords, service
+	// account password), so it must not be world-readable on a multi-user host.
+	return os.WriteFile(path, b, 0o600)
 }

@@ -19,8 +19,10 @@ func serveLPD(ln net.Listener) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
+			logDebug("LPR", "accept loop exiting: %v", err)
 			return
 		}
+		logTrace("LPR", "accepted connection from %s", conn.RemoteAddr())
 		trackGo(func() { handleLPD(conn) })
 	}
 }

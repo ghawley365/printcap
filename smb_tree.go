@@ -400,7 +400,9 @@ func handleClose(s *smbSession, req []byte) (resp []byte, status uint32, ok bool
 		j.User = s.user
 		j.data = h.spoolBuf
 		j.Bytes = len(h.spoolBuf)
-		_ = smbCaptureJob(j)
+		if err := smbCaptureJob(j); err != nil {
+			logErr("SMB", "capture of job %q from %s failed: %v", j.JobName, j.Source, err)
+		}
 	}
 	delete(s.handles, fileIDKey(h.fileID))
 

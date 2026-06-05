@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -153,7 +154,10 @@ type Logger struct {
 	syslog  *syslogSink         // optional remote syslog
 }
 
-var logger = &Logger{level: LevelInfo, console: true, ringMax: 2000}
+// The global logger starts at Trace so anything emitted before configureLogging
+// runs (very early startup) is captured. configureLogging then applies cfg.Log
+// (also Trace by default — see defaultConfig) plus any -v/-loglevel overrides.
+var logger = &Logger{level: LevelTrace, console: true, ringMax: 2000}
 
 // configureLogging (re)builds the global logger from cfg.Log plus verbose flag
 // overrides. It is safe to call again (the GUI calls it on save): existing
@@ -200,12 +204,21 @@ func configureLogging() {
 	logger.mu.Unlock()
 }
 
+// defaultLogPath puts the log alongside the captures, in a "logs" subfolder of
+// the capture directory, so all run artifacts live together. The subfolder is
+// created here (configureLogging runs before the engine's ensureStorageDirs, so
+// the directory must exist by the time the first line is written). Falls back to
+// the executable directory if the logs subfolder can't be created.
 func defaultLogPath() string {
-	exe, err := os.Executable()
-	if err != nil {
-		return "printcap.log"
+	dir := logDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		exe, eerr := os.Executable()
+		if eerr != nil {
+			return "printcap.log"
+		}
+		return filepath.Join(filepath.Dir(exe), "printcap.log")
 	}
-	return exe[:len(exe)-len(baseName(exe))] + "printcap.log"
+	return filepath.Join(dir, "printcap.log")
 }
 
 func baseName(p string) string {

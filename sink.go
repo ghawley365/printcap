@@ -138,8 +138,10 @@ func (s *captureSink) save(j *job) error {
 	}
 
 	if mode != saveRaw {
-		b, _ := json.MarshalIndent(j, "", "  ")
-		if err := os.WriteFile(filepath.Join(s.dir, base+".json"), b, 0o600); err != nil {
+		b, merr := json.MarshalIndent(j, "", "  ")
+		if merr != nil {
+			logErr(j.Protocol, "failed to marshal metadata for job %d: %v", j.ID, merr)
+		} else if err := os.WriteFile(filepath.Join(s.dir, base+".json"), b, 0o600); err != nil {
 			logErr(j.Protocol, "failed to write metadata: %v", err)
 		}
 	}

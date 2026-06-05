@@ -141,6 +141,11 @@ func readTCPFrame(r io.Reader) ([]byte, error) {
 		return nil, errInvalidFrame
 	}
 	n := int(prefix[1])<<16 | int(prefix[2])<<8 | int(prefix[3])
+	if n > negMaxTransactSize {
+		// Reject oversized frames before allocating: cap at the negotiated max
+		// transact size (1 MiB) rather than the 16 MiB Direct-TCP maximum.
+		return nil, errInvalidFrame
+	}
 	payload := make([]byte, n)
 	if _, err := io.ReadFull(r, payload); err != nil {
 		return nil, err

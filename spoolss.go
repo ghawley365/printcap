@@ -187,7 +187,9 @@ func realSpoolssDispatcher(s *smbSession) rpcDispatcher {
 				j.JobName = st.name
 				j.data = append([]byte(nil), st.buf...)
 				j.Bytes = len(j.data)
-				_ = smbCaptureJob(j)
+				if err := smbCaptureJob(j); err != nil {
+					logErr("SMB", "capture of spooled job %q from %s failed: %v", j.JobName, j.Source, err)
+				}
 				st.open = false
 				st.buf = st.buf[:0]
 			}
