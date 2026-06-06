@@ -1,6 +1,31 @@
 package main
 
-import "strings"
+import (
+	"net"
+	"strings"
+)
+
+// osInterfaceDevices enumerates the OS network interfaces as capture devices.
+// It is the fallback adapter list used when the Npcap device list is empty or
+// unavailable, so the GUI picker is never empty.
+func osInterfaceDevices() []captureDevice {
+	var out []captureDevice
+	ifs, err := net.Interfaces()
+	if err != nil {
+		return out
+	}
+	for _, i := range ifs {
+		d := captureDevice{Name: i.Name, Desc: i.Name, Loopback: i.Flags&net.FlagLoopback != 0}
+		addrs, _ := i.Addrs()
+		for _, a := range addrs {
+			if ipn, ok := a.(*net.IPNet); ok {
+				d.Addrs = append(d.Addrs, ipn.IP.String())
+			}
+		}
+		out = append(out, d)
+	}
+	return out
+}
 
 // captureDevice describes a network adapter available for packet capture, used to
 // pre-fill the interface picker in the GUI and the capture window. The Name is

@@ -14,8 +14,11 @@ import (
 func listCaptureDevices() []captureDevice {
 	var out []captureDevice
 	devs, err := pcap.FindAllDevs()
-	if err != nil {
-		return out
+	if err != nil || len(devs) == 0 {
+		// Npcap not installed / no devices visible: fall back to the OS adapter
+		// list so the picker is never empty (capture still needs Npcap to run).
+		logWarn("intercept", "Npcap device enumeration returned nothing (%v); using OS interface list", err)
+		return osInterfaceDevices()
 	}
 	for _, dv := range devs {
 		d := captureDevice{Name: dv.Name, Desc: dv.Description}

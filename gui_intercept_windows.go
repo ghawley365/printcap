@@ -264,9 +264,10 @@ func showCaptureWindow() {
 	labels, devs := interfaceLabels()
 	labels, devs = ensureCurrentIface(labels, devs, cfg.Intercept.Interface)
 	cwDevs = devs
+	logInfo("intercept", "GUI capture window: %d adapter(s) available", len(devs))
 	captureModel = &packetTableModel{}
 
-	_ = dec.MainWindow{
+	err := (dec.MainWindow{
 		AssignTo: &captureWin,
 		Title:    "printcap — Packet capture",
 		MinSize:  dec.Size{Width: 920, Height: 560},
@@ -312,8 +313,10 @@ func showCaptureWindow() {
 			},
 			dec.Label{AssignTo: &cwStatus, Text: "Idle. Pick an adapter and Start. Double-click a TCP row to follow/reassemble its stream. (Live capture needs an Npcap build on Windows.)"},
 		},
-	}.Create()
-	if captureWin == nil {
+	}).Create()
+	if err != nil || captureWin == nil {
+		walk.MsgBox(mw, "Capture window", "Could not open the packet capture window:\n\n"+fmt.Sprint(err), walk.MsgBoxIconError)
+		captureWin = nil
 		return
 	}
 	captureTV.SetCellStyler(captureModel)
