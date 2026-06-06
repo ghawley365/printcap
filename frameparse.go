@@ -14,6 +14,7 @@ import (
 const (
 	etherTypeIPv4 = 0x0800
 	etherTypeIPv6 = 0x86dd
+	etherTypeARP  = 0x0806
 	etherTypeVLAN = 0x8100 // 802.1Q
 	etherTypeQinQ = 0x88a8 // 802.1ad (stacked VLAN)
 

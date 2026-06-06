@@ -5,6 +5,24 @@ import (
 	"strings"
 )
 
+// connectionNames returns the OS network-connection names (on Windows these are
+// the friendly connection aliases like "Ethernet"/"Wi-Fi" that ICS/HNetCfg use),
+// excluding loopback. Used to pre-fill the ICS pickers.
+func connectionNames() []string {
+	var out []string
+	ifs, err := net.Interfaces()
+	if err != nil {
+		return out
+	}
+	for _, i := range ifs {
+		if i.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		out = append(out, i.Name)
+	}
+	return out
+}
+
 // osInterfaceDevices enumerates the OS network interfaces as capture devices.
 // It is the fallback adapter list used when the Npcap device list is empty or
 // unavailable, so the GUI picker is never empty.

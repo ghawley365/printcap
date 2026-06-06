@@ -674,10 +674,26 @@ Two places show the captured packets, with the same live view + reassembly:
 - GO LIVE: a real-time, scrolling packet view fed as packets arrive (pause /
   clear / auto-scroll; shows "missed N" if a burst overruns the buffer).
   "Refresh (static)" instead reads the saved pcap.
-- FILTER by free text, port, service (HTTP/EWS, HTTPS, IPP, raw/9100, LPR, SNMP,
-  SMB, WSD, mDNS), packet class, and protocol.
+- FILTER with a Wireshark-style display filter in the Filter box. Terms are
+  ANDed (space-separated); a bare word is a substring match. Fields:
+    src dst addr ip      e.g.  dst==10.0.0.5   addr~10.0.0
+    sport dport port     e.g.  port==9100      dport>=1024
+    proto svc class      e.g.  proto==arp      svc==http   class==reset
+    len ipver            e.g.  len>100         ipver!=6
+  Operators: ==  !=  ~ (contains)  and  >  <  >=  <=  for numbers.
+  The "Hide IPv6" checkbox is a quick shortcut for ipver!=6 in the view.
 - COLOR CODING: errors and resets are RED; print jobs (raw/9100, LPR, IPP) and
   SNMP are GREEN; HTTPS (443) is BLUE.
+- ROW TYPES: TCP/UDP/ICMP rows are decoded; ARP rows show who-has/is-at (you'll
+  see many during ARP positioning); "non-IP" rows are other L2 frames (the
+  EtherType is shown in Info).
+
+DISABLE IPv6 — two effects
+- The "Disable IPv6" checkbox on the Capture tab (and the capture window) drops
+  IPv6 at CAPTURE time, so it never reaches the pcap/ring — this takes effect on
+  the next Start.
+- The "Hide IPv6" checkbox in the capture window hides IPv6 from the live VIEW
+  immediately (no restart). Use that for an instant effect.
 - FOLLOW STREAM: click any TCP row to reassemble both directions (client->server
   and server->client), viewable as text or hex. HTTP renders as text, so the
   printer's WEB API (EWS/REST) and IPP exchanges are readable. Each direction and

@@ -25,8 +25,8 @@ var (
 	uiIntIface      *walk.ComboBox
 	uiIntUplink     *walk.ComboBox
 	uiIntMFP        *walk.LineEdit
-	uiIntICSPub     *walk.LineEdit
-	uiIntICSPrv     *walk.LineEdit
+	uiIntICSPub     *walk.ComboBox
+	uiIntICSPrv     *walk.ComboBox
 	uiIntPromisc    *walk.CheckBox
 	uiIntNoV6       *walk.CheckBox
 	uiIntCarveAll   *walk.CheckBox
@@ -119,8 +119,8 @@ func captureTab() dec.TabPage {
 					dec.Label{Text: "Printer network adapter:"}, dec.ComboBox{AssignTo: &uiIntIface, Model: labels},
 					dec.Label{Text: "Internet adapter (uplink):"}, dec.ComboBox{AssignTo: &uiIntUplink, Model: uplinkLabels},
 					dec.Label{Text: "MFP / printer IP:"}, dec.LineEdit{AssignTo: &uiIntMFP, ToolTipText: "the printer's IP — used as the ARP target and the 'MFP only' capture filter"},
-					dec.Label{Text: "Auto-NAT (ICS) internet conn.:"}, dec.LineEdit{AssignTo: &uiIntICSPub, ToolTipText: "Windows connection NAME with internet, e.g. \"Wi-Fi\" — set both ICS fields to auto-enable Internet Connection Sharing (and clean it up on stop)"},
-					dec.Label{Text: "Auto-NAT (ICS) printer conn.:"}, dec.LineEdit{AssignTo: &uiIntICSPrv, ToolTipText: "Windows connection NAME on the printer side, e.g. \"Ethernet\". Note: ICS sets this adapter to 192.168.137.1"},
+					dec.Label{Text: "Auto-NAT (ICS) internet conn.:"}, dec.ComboBox{AssignTo: &uiIntICSPub, Editable: true, Model: connectionNames(), ToolTipText: "Windows connection with internet, e.g. \"Wi-Fi\" — set both ICS fields to auto-enable Internet Connection Sharing (and clean it up on stop)"},
+					dec.Label{Text: "Auto-NAT (ICS) printer conn.:"}, dec.ComboBox{AssignTo: &uiIntICSPrv, Editable: true, Model: connectionNames(), ToolTipText: "Windows connection on the printer side, e.g. \"Ethernet\". Note: ICS sets this adapter to 192.168.137.1"},
 					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiIntPromisc, Text: "Promiscuous mode"},
 					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiIntNoV6, Text: "Disable IPv6 (capture IPv4 only)"},
 				},
@@ -230,6 +230,7 @@ var (
 	cwUplink       *walk.ComboBox
 	cwMfp          *walk.LineEdit
 	cwMfpOnly      *walk.CheckBox
+	cwNoV6         *walk.CheckBox
 	cwAck          *walk.CheckBox
 	cwOperator     *walk.LineEdit
 	cwEngagement   *walk.LineEdit
@@ -333,7 +334,7 @@ func showCaptureWindow() {
 					dec.CheckBox{AssignTo: &cwAck, Text: "Authorized"},
 					dec.Label{Text: "Operator:"}, dec.LineEdit{AssignTo: &cwOperator, MinSize: dec.Size{Width: 120}},
 					dec.Label{Text: "Engagement:"}, dec.LineEdit{AssignTo: &cwEngagement, MinSize: dec.Size{Width: 120}},
-					dec.Label{Text: "Filter:"}, dec.LineEdit{AssignTo: &cwFilter, MinSize: dec.Size{Width: 180}, ToolTipText: "substring match on src/dst/proto/info"},
+					dec.Label{Text: "Filter:"}, dec.LineEdit{AssignTo: &cwFilter, MinSize: dec.Size{Width: 240}, ToolTipText: "display filter: dst==10.0.0.5  port==9100  proto==arp  ipver!=6  len>100  svc==http  addr~10.0  (space = AND; bare word = substring)"},
 					dec.HSpacer{},
 				},
 			},
@@ -344,6 +345,7 @@ func showCaptureWindow() {
 					dec.ComboBox{AssignTo: &cwUplink, Model: uplinkLabels, MinSize: dec.Size{Width: 240}},
 					dec.Label{Text: "MFP IP:"}, dec.LineEdit{AssignTo: &cwMfp, MinSize: dec.Size{Width: 120}},
 					dec.CheckBox{AssignTo: &cwMfpOnly, Text: "MFP only", OnClicked: onCaptureClear},
+					dec.CheckBox{AssignTo: &cwNoV6, Text: "Hide IPv6", OnClicked: onCaptureClear},
 					dec.HSpacer{},
 				},
 			},
@@ -375,6 +377,7 @@ func showCaptureWindow() {
 	cwIface.SetCurrentIndex(ifaceIndexFor(cwDevs, cfg.Intercept.Interface))
 	cwUplink.SetCurrentIndex(ifaceIndexFor(cwDevs, cfg.Intercept.UplinkIface))
 	cwMfp.SetText(cfg.Intercept.MFPIP)
+	cwNoV6.SetChecked(cfg.Intercept.DisableIPv6)
 	cwAck.SetChecked(cfg.Intercept.Authorization.Acknowledged)
 	cwOperator.SetText(cfg.Intercept.Authorization.Operator)
 	cwEngagement.SetText(cfg.Intercept.Authorization.Engagement)
@@ -440,6 +443,7 @@ func onCaptureStartStop() {
 	cfg.Intercept.Interface = ifaceFromCombo(cwDevs, cwIface.CurrentIndex())
 	cfg.Intercept.UplinkIface = ifaceFromCombo(cwDevs, cwUplink.CurrentIndex())
 	cfg.Intercept.MFPIP = strings.TrimSpace(cwMfp.Text())
+	cfg.Intercept.DisableIPv6 = cwNoV6.Checked()
 	cfg.Intercept.Enabled = true
 	cfg.Intercept.Authorization.Acknowledged = cwAck.Checked()
 	cfg.Intercept.Authorization.Operator = strings.TrimSpace(cwOperator.Text())
@@ -489,6 +493,9 @@ func pumpCaptureRows() {
 	recs, link, cursor, firstNo, dropped := captureLive.since(captureCursor, 2000)
 	captureCursor = cursor
 	f := captureFilter{q: strings.TrimSpace(cwFilter.Text())}
+	if cwNoV6 != nil && cwNoV6.Checked() {
+		f.noV6 = true // immediate view filter (capture-time drop applies on next Start)
+	}
 	if cwMfpOnly != nil && cwMfpOnly.Checked() {
 		if a, err := netip.ParseAddr(strings.TrimSpace(cwMfp.Text())); err == nil {
 			f.host = a.String() // "MFP only" → show just traffic to/from the printer

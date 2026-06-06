@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -107,6 +108,94 @@ func TestDissectICMPError(t *testing.T) {
 	}
 	if s.Proto != "ICMP" {
 		t.Fatalf("proto=%q", s.Proto)
+	}
+}
+
+// ethARP builds an Ethernet/ARP frame (op 1=request, 2=reply).
+func ethARP(op uint16, spa, tpa string) []byte {
+	sip := netip.MustParseAddr(spa).As4()
+	tip := netip.MustParseAddr(tpa).As4()
+	arp := make([]byte, 28)
+	arp[1], arp[2], arp[3], arp[4], arp[5] = 1, 0x08, 0x00, 6, 4 // htype/ptype/hlen/plen
+	arp[6], arp[7] = byte(op>>8), byte(op)
+	copy(arp[14:18], sip[:]) // sender protocol addr
+	copy(arp[24:28], tip[:]) // target protocol addr
+	eth := make([]byte, 14)
+	binary.BigEndian.PutUint16(eth[12:], etherTypeARP)
+	return append(eth, arp...)
+}
+
+// ethIPv6 builds an Ethernet/IPv6 frame with the given next-header and payload.
+func ethIPv6(nextHdr byte, payload []byte) []byte {
+	ip := make([]byte, 40)
+	ip[0] = 0x60 // version 6
+	binary.BigEndian.PutUint16(ip[4:], uint16(len(payload)))
+	ip[6] = nextHdr
+	ip = append(ip, payload...)
+	eth := make([]byte, 14)
+	binary.BigEndian.PutUint16(eth[12:], etherTypeIPv6)
+	return append(eth, ip...)
+}
+
+func TestDissectARP(t *testing.T) {
+	s := dissectSummary(linkTypeEthernet, ethARP(1, "10.0.0.1", "10.0.0.9"))
+	if s.Proto != "ARP" || s.IPVer != 0 {
+		t.Fatalf("proto=%q ipver=%d", s.Proto, s.IPVer)
+	}
+	if s.Src != "10.0.0.1" || s.Dst != "10.0.0.9" {
+		t.Fatalf("src/dst = %q / %q", s.Src, s.Dst)
+	}
+	if !strings.Contains(s.Info, "who has 10.0.0.9") {
+		t.Fatalf("info = %q", s.Info)
+	}
+	if r := dissectSummary(linkTypeEthernet, ethARP(2, "10.0.0.9", "10.0.0.1")); !strings.Contains(r.Info, "is at") {
+		t.Fatalf("reply info = %q", r.Info)
+	}
+}
+
+func TestDissectIPVersion(t *testing.T) {
+	if v := dissectSummary(linkTypeEthernet, ethIPv4TCP("10.0.0.1", "10.0.0.2", 1, 2, 1, tcpFlagACK, nil)).IPVer; v != 4 {
+		t.Fatalf("IPv4 ipver=%d", v)
+	}
+	tcp := make([]byte, 20)
+	tcp[12] = 5 << 4
+	tcp[2], tcp[3] = 0, 80 // dport 80
+	if v := dissectSummary(linkTypeEthernet, ethIPv6(ipProtoTCP, tcp)).IPVer; v != 6 {
+		t.Fatalf("IPv6 ipver=%d", v)
+	}
+}
+
+func TestMatchExpr(t *testing.T) {
+	s := dissectSummary(linkTypeEthernet, ethIPv4TCP("10.0.0.1", "10.0.0.9", 50000, 9100, 1, tcpFlagACK, []byte("data")))
+	s.Len = 100 // Len is normally set by the caller, not dissectSummary
+	cases := []struct {
+		expr string
+		want bool
+	}{
+		{"dst==10.0.0.9", true}, {"dst==10.0.0.8", false},
+		{"src==10.0.0.1", true},
+		{"port==9100", true}, {"dport==9100", true}, {"sport==9100", false},
+		{"proto==tcp", true}, {"proto==arp", false},
+		{"svc==raw", true},
+		{"len>0", true}, {"len>100000", false}, {"len>=1", true},
+		{"ipver==4", true}, {"ipver!=6", true}, {"ipver==6", false},
+		{"addr~10.0", true}, {"addr==10.0.0.9", true},
+		{"9100", true}, {"nope", false},
+		{"dst==10.0.0.9 port==9100", true}, {"dst==10.0.0.9 port==80", false},
+	}
+	for _, c := range cases {
+		if got := matchExpr(s, c.expr); got != c.want {
+			t.Errorf("matchExpr(%q)=%v want %v", c.expr, got, c.want)
+		}
+	}
+}
+
+func TestNoV6Filter(t *testing.T) {
+	if captureMatch(packetSummary{IPVer: 6}, captureFilter{noV6: true}) {
+		t.Fatal("IPv6 should be hidden when noV6 is set")
+	}
+	if !captureMatch(packetSummary{IPVer: 4}, captureFilter{noV6: true}) {
+		t.Fatal("IPv4 should pass when noV6 is set")
 	}
 }
 

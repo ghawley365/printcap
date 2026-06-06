@@ -90,6 +90,7 @@ func apiCapture(w http.ResponseWriter, r *http.Request) {
 		svc:    q.Get("svc"),
 		port:   atoiDefault(q.Get("port"), 0),
 		host:   normHost(q.Get("host")),
+		noV6:   q.Get("nov6") != "",
 		q:      q.Get("q"),
 		offset: atoiDefault(q.Get("offset"), 0),
 		limit:  atoiDefault(q.Get("limit"), 500),
@@ -175,6 +176,7 @@ func apiCaptureLive(w http.ResponseWriter, r *http.Request) {
 		svc:   q.Get("svc"),
 		port:  atoiDefault(q.Get("port"), 0),
 		host:  normHost(q.Get("host")),
+		noV6:  q.Get("nov6") != "",
 		q:     q.Get("q"),
 	}
 	recs, link, cursor, firstNo, dropped := captureLive.since(since, limit)

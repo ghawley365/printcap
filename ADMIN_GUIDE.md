@@ -1027,9 +1027,16 @@ inspect, export, and prune captures, plus control listeners and the engine.
   * **Go live** — a scrolling, real-time view fed from an in-memory ring as
     packets arrive (pause / clear / auto-scroll; shows a "missed N" notice if a
     burst overruns the ring). **Refresh (static)** reads the saved pcap instead.
-  * **Filtering** — by free text, **port**, **service** (HTTP/EWS, HTTPS, IPP,
-    raw/9100, LPR, SNMP, SMB, WSD, mDNS), packet **class** (RST/ICMP-error/SYN/
-    FIN/data), and protocol. Resets and ICMP errors are color-coded.
+  * **Filtering** — discrete controls (port, service, class, protocol, host) plus
+    a **Wireshark-style display filter** box. Terms are ANDed (space-separated);
+    a bare word is a substring match. Fields: `src dst addr ip`, `sport dport
+    port`, `proto svc class color info`, `len ipver`; operators `== != ~` and
+    `> < >= <=` for numbers. Examples: `dst==10.0.0.5 port==9100`, `proto==arp`,
+    `ipver!=6 len>100`, `svc==http`. A **Hide IPv6** checkbox is a shortcut for
+    `ipver!=6`.
+  * **Row types** — TCP/UDP/ICMP are decoded; **ARP** rows show who-has/is-at
+    (common during ARP positioning); **non-IP** rows are other L2 frames with the
+    EtherType in the Info column.
   * **Follow TCP stream** — click any TCP row to reassemble both directions
     (client→server / server→client) with an auto/text/hex view; HTTP shows as
     text, so **printer web-API (EWS/REST) and IPP exchanges are readable**. Each

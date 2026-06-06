@@ -133,7 +133,7 @@ const dashboardHTML = `<!doctype html>
       <span class="muted">· click a TCP row to follow/reassemble its stream</span>
     </div>
     <div class="controls">
-      <input id="capQ" class="grow" placeholder="filter by IP, port, flag, info…">
+      <input id="capQ" class="grow" placeholder="filter: dst==10.0.0.5  port==9100  proto==arp  ipver!=6  len>100  svc==http  (space=AND)">
       <input id="capPort" type="number" min="0" max="65535" placeholder="port" style="width:90px;">
       <input id="capHost" placeholder="host IP (e.g. MFP)" style="width:140px;">
       <select id="capSvc">
@@ -175,6 +175,7 @@ const dashboardHTML = `<!doctype html>
       <button id="capPause" disabled>⏸ Pause</button>
       <button id="capClear">Clear</button>
       <button id="capRefresh">Refresh (static)</button>
+      <label class="muted"><input type="checkbox" id="capNoV6"> hide IPv6</label>
       <label class="muted"><input type="checkbox" id="capAutoscroll" checked> auto-scroll</label>
       <span class="muted" id="capLiveStat"></span>
     </div>
@@ -455,7 +456,7 @@ function startSSE(){
 }
 
 // ---- network capture viewer (static + live) ----
-var capState={q:'',port:'',host:'',svc:'',cls:'',proto:'',offset:0,limit:500,matched:0,
+var capState={q:'',port:'',host:'',svc:'',cls:'',proto:'',nov6:false,offset:0,limit:500,matched:0,
               live:false,paused:false,cursor:0,rows:[],dropped:0,timer:null};
 
 function capFilters(p){
@@ -465,6 +466,7 @@ function capFilters(p){
   if(capState.svc)p.set('svc',capState.svc);
   if(capState.cls)p.set('class',capState.cls);
   if(capState.proto)p.set('proto',capState.proto);
+  if(capState.nov6)p.set('nov6','1');
   return p;
 }
 function svcTag(s){return s?(' <span class="svc">'+esc(s)+'</span>'):'';}
@@ -563,6 +565,7 @@ document.getElementById('capHost').addEventListener('input',function(){capState.
 document.getElementById('capSvc').addEventListener('change',function(){capState.svc=this.value;capFilterChanged();});
 document.getElementById('capClass').addEventListener('change',function(){capState.cls=this.value;capFilterChanged();});
 document.getElementById('capProto').addEventListener('change',function(){capState.proto=this.value;capFilterChanged();});
+document.getElementById('capNoV6').addEventListener('change',function(){capState.nov6=this.checked;capFilterChanged();});
 document.getElementById('capPageSize').addEventListener('change',function(){capState.limit=parseInt(this.value,10)||500;capState.offset=0;if(!capState.live)loadCapture();});
 document.getElementById('capPrev').onclick=function(){capState.offset=Math.max(0,capState.offset-capState.limit);loadCapture();};
 document.getElementById('capNext').onclick=function(){if(capState.offset+capState.limit<capState.matched){capState.offset+=capState.limit;loadCapture();}};

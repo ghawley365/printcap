@@ -2,11 +2,39 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"net/netip"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
+
+// arpSummary decodes an ARP packet (EtherType 0x0806). ARP is the bulk of the
+// "non-IP" traffic during ARP positioning, so showing it as readable
+// who-has/is-at lines (with the IPs as src/dst, so address filters work) is far
+// more useful than a generic "non-IP frame".
+func arpSummary(s packetSummary, b []byte) packetSummary {
+	s.Proto, s.IPVer = "ARP", 0
+	if len(b) < 28 {
+		s.Info = "truncated ARP"
+		return s
+	}
+	op := uint16(b[6])<<8 | uint16(b[7])
+	spa := netip.AddrFrom4([4]byte{b[14], b[15], b[16], b[17]})
+	tpa := netip.AddrFrom4([4]byte{b[24], b[25], b[26], b[27]})
+	sha := net.HardwareAddr(b[8:14]).String()
+	s.Src, s.Dst = spa.String(), tpa.String()
+	switch op {
+	case 1:
+		s.Info = fmt.Sprintf("who has %s? tell %s", tpa, spa)
+	case 2:
+		s.Info = fmt.Sprintf("%s is at %s", spa, sha)
+	default:
+		s.Info = fmt.Sprintf("ARP op=%d", op)
+	}
+	return s
+}
 
 // pcapview turns captured frames into per-packet summaries for the dashboard's
 // capture viewer: a one-line description plus a coarse class the UI color-codes
@@ -31,8 +59,9 @@ type packetSummary struct {
 	Dst   string `json:"dst"`
 	Sport int    `json:"sport,omitempty"`
 	Dport int    `json:"dport,omitempty"`
-	Proto string `json:"proto"`           // TCP | UDP | ICMP | ICMPv6 | IPv4 | IPv6 | non-IP
+	Proto string `json:"proto"`           // TCP | UDP | ICMP | ICMPv6 | ARP | IPv4 | IPv6 | non-IP
 	Svc   string `json:"svc,omitempty"`   // recognized service by port (http/https/ipp/raw/...)
+	IPVer int    `json:"ipver,omitempty"` // 4, 6, or 0 (ARP / non-IP)
 	Len   int    `json:"len"`             // captured frame length
 	Info  string `json:"info"`            // human-readable summary
 	Class string `json:"class"`           // reset | syn | fin | error | data | other
@@ -114,14 +143,25 @@ func dissectSummary(linkType int, frame []byte) packetSummary {
 	if !ok {
 		return s
 	}
+	if ethertype == etherTypeARP {
+		return arpSummary(s, l3)
+	}
 	src, dst, proto, l4, ok := parseIPHeader(ethertype, l3)
 	if !ok {
-		if ethertype == etherTypeIPv6 {
-			s.Proto, s.Info = "IPv6", "IPv6 packet"
-		} else if ethertype == etherTypeIPv4 {
-			s.Proto, s.Info = "IPv4", "IPv4 packet"
+		switch ethertype {
+		case etherTypeIPv6:
+			s.Proto, s.IPVer, s.Info = "IPv6", 6, "IPv6 packet"
+		case etherTypeIPv4:
+			s.Proto, s.IPVer, s.Info = "IPv4", 4, "IPv4 packet"
+		default:
+			s.Info = fmt.Sprintf("EtherType 0x%04x", ethertype)
 		}
 		return s
+	}
+	if ethertype == etherTypeIPv4 {
+		s.IPVer = 4
+	} else if ethertype == etherTypeIPv6 {
+		s.IPVer = 6
 	}
 
 	switch proto {
@@ -304,9 +344,120 @@ type captureFilter struct {
 	svc    string // http | https | ipp | raw | snmp | ... (recognized service)
 	port   int    // match flows with this source OR destination port (0 = any)
 	host   string // match packets whose source OR destination IP equals this (e.g. the MFP)
-	q      string // substring over src/dst/info/proto
+	noV6   bool   // hide IPv6 packets from the view
+	q      string // Wireshark-lite display-filter expression (see matchExpr)
 	offset int
 	limit  int
+}
+
+// matchExpr evaluates a Wireshark-lite display filter against a packet. Terms are
+// space-separated and ANDed. Each term is either "field op value" or a bare word
+// (case-insensitive substring over src/dst/proto/svc/info). Supported fields:
+//
+//	src dst addr ip   (IP; ==, !=, ~)
+//	sport dport port  (number; ==, !=, >, <, >=, <=)
+//	proto svc class color info  (text; ==, !=, ~)
+//	len ipver         (number; ==, !=, >, <, >=, <=)
+//
+// Examples: "dst==10.0.0.5", "port==9100", "proto==arp", "ipver!=6 len>100",
+// "svc==http", "addr~10.0".
+func matchExpr(s packetSummary, expr string) bool {
+	for _, term := range strings.Fields(expr) {
+		if !matchTerm(s, term) {
+			return false
+		}
+	}
+	return true
+}
+
+// exprOps are matched longest-first so ">=" wins over ">".
+var exprOps = []string{">=", "<=", "==", "!=", "~", ">", "<", "="}
+
+func splitTerm(t string) (field, op, val string) {
+	for _, o := range exprOps {
+		if i := strings.Index(t, o); i > 0 {
+			return t[:i], o, t[i+len(o):]
+		}
+	}
+	return "", "", ""
+}
+
+func matchTerm(s packetSummary, term string) bool {
+	field, op, val := splitTerm(term)
+	if op == "" { // bare word → substring over the row
+		return strings.Contains(exprHaystack(s), strings.ToLower(term))
+	}
+	switch strings.ToLower(field) {
+	case "proto":
+		return cmpStr(strings.ToLower(s.Proto), op, strings.ToLower(val))
+	case "svc", "service":
+		return cmpStr(strings.ToLower(s.Svc), op, strings.ToLower(val))
+	case "class":
+		return cmpStr(strings.ToLower(s.Class), op, strings.ToLower(val))
+	case "color":
+		return cmpStr(strings.ToLower(s.Color), op, strings.ToLower(val))
+	case "info":
+		return cmpStr(strings.ToLower(s.Info), op, strings.ToLower(val))
+	case "src":
+		return cmpStr(ipOf(s.Src), op, val)
+	case "dst":
+		return cmpStr(ipOf(s.Dst), op, val)
+	case "addr", "ip", "host":
+		a, b := cmpStr(ipOf(s.Src), op, val), cmpStr(ipOf(s.Dst), op, val)
+		if op == "!=" {
+			return a && b // neither endpoint is val
+		}
+		return a || b
+	case "len":
+		return cmpNum(s.Len, op, val)
+	case "sport":
+		return cmpNum(s.Sport, op, val)
+	case "dport":
+		return cmpNum(s.Dport, op, val)
+	case "port":
+		return cmpNum(s.Sport, op, val) || cmpNum(s.Dport, op, val)
+	case "ipver", "ipv":
+		return cmpNum(s.IPVer, op, val)
+	}
+	return strings.Contains(exprHaystack(s), strings.ToLower(term)) // unknown field → substring
+}
+
+func exprHaystack(s packetSummary) string {
+	return strings.ToLower(s.Src + " " + s.Dst + " " + s.Proto + " " + s.Svc + " " + s.Info)
+}
+
+func cmpStr(actual, op, want string) bool {
+	switch op {
+	case "==", "=":
+		return strings.EqualFold(actual, want)
+	case "!=":
+		return !strings.EqualFold(actual, want)
+	case "~":
+		return strings.Contains(strings.ToLower(actual), strings.ToLower(want))
+	}
+	return false // >,< not meaningful for strings
+}
+
+func cmpNum(actual int, op, want string) bool {
+	n, err := strconv.Atoi(strings.TrimSpace(want))
+	if err != nil {
+		return false
+	}
+	switch op {
+	case "==", "=":
+		return actual == n
+	case "!=":
+		return actual != n
+	case ">":
+		return actual > n
+	case "<":
+		return actual < n
+	case ">=":
+		return actual >= n
+	case "<=":
+		return actual <= n
+	}
+	return false
 }
 
 // normHost normalizes a host filter value to canonical IP form (so "10.0.0.09"
@@ -435,11 +586,11 @@ func captureMatch(s packetSummary, f captureFilter) bool {
 	if f.host != "" && ipOf(s.Src) != f.host && ipOf(s.Dst) != f.host {
 		return false
 	}
-	if f.q != "" {
-		hay := strings.ToLower(s.Src + " " + s.Dst + " " + s.Proto + " " + s.Info)
-		if !strings.Contains(hay, strings.ToLower(f.q)) {
-			return false
-		}
+	if f.noV6 && s.IPVer == 6 {
+		return false
+	}
+	if f.q != "" && !matchExpr(s, f.q) {
+		return false
 	}
 	return true
 }
