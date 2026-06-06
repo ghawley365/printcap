@@ -197,6 +197,14 @@ func validateIntercept(c *Config) []configIssue {
 			Fix:     "set intercept.mfp_ip to the printer's literal IP address, or leave blank",
 		})
 	}
+	// Multi-homed: the uplink (internet) adapter must differ from the printer one.
+	if u := strings.TrimSpace(c.Intercept.UplinkIface); u != "" && u == strings.TrimSpace(c.Intercept.Interface) {
+		issues = append(issues, configIssue{
+			Severity: sevWarning, Field: "intercept.uplink_interface",
+			Message: "uplink adapter is the same as the printer adapter",
+			Fix:     "pick a different adapter for internet uplink, or leave it blank for single-homed capture",
+		})
+	}
 	return issues
 }
 

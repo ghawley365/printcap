@@ -309,6 +309,16 @@ type captureFilter struct {
 	limit  int
 }
 
+// normHost normalizes a host filter value to canonical IP form (so "10.0.0.09"
+// or odd spacing still matches), or returns the trimmed input if not an IP.
+func normHost(s string) string {
+	s = strings.TrimSpace(s)
+	if a, err := netip.ParseAddr(s); err == nil {
+		return a.String()
+	}
+	return s
+}
+
 // ipOf extracts the bare IP from a "ip:port" or "ip" endpoint string.
 func ipOf(s string) string {
 	if ap, err := netip.ParseAddrPort(s); err == nil {

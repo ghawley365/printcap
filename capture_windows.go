@@ -150,11 +150,17 @@ func (s *windowsLiveSource) Close() error {
 // relay; this controller does the netsh per-interface toggle which works without
 // reboot on modern builds. Treat reboot-free forwarding as host-dependent and
 // verify on the target before relying on it in an engagement.
+// ipRouterKey holds IPEnableRouter, the documented registry value that enables
+// global IPv4 routing on Windows. (Per-interface "forwarding" via netsh exists
+// too, but it is keyed by the connection alias, which differs from the Npcap
+// device name we capture on — so the global switch is what we can reliably set.)
+const ipRouterKey = `HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters`
+
 type winForwarding struct {
 	printerIface string // adapter the printer/MFP is on (capture side)
 	uplinkIface  string // adapter with internet access (multi-homed); "" = single-homed
-	priorOn      bool   // global IPv4 forwarding was already enabled before us
-	set          bool   // WE enabled forwarding (so Restore should disable it)
+	prior        string // prior IPEnableRouter value: "0", "1", or "" (absent/unknown)
+	set          bool   // WE changed it (so Restore puts it back)
 }
 
 func newForwardingControl(printerIface, uplinkIface string) forwardingControl {
@@ -162,40 +168,53 @@ func newForwardingControl(printerIface, uplinkIface string) forwardingControl {
 }
 
 func (w *winForwarding) Enable() error {
-	// Snapshot prior state so cleanup only undoes what we changed (don't disable
-	// forwarding a user/router had on already).
-	if out, err := exec.Command("netsh", "interface", "ipv4", "show", "global").Output(); err == nil {
-		for _, ln := range strings.Split(strings.ToLower(string(out)), "\n") {
-			if strings.Contains(ln, "forward") && strings.Contains(ln, "enabled") {
-				w.priorOn = true
-			}
-		}
-	}
-	if w.priorOn {
-		logInfo("intercept", "IPv4 forwarding was already enabled; leaving it as-is")
+	// Snapshot the prior value so cleanup only undoes what we changed.
+	w.prior = regIPEnableRouter()
+	if w.prior == "1" {
+		logInfo("intercept", "global IP routing (IPEnableRouter) already enabled; leaving it as-is")
 		return nil
 	}
-	if err := exec.Command("netsh", "interface", "ipv4", "set", "global", "forwarding=enabled").Run(); err != nil {
-		return fmt.Errorf("netsh set global forwarding: %w", err)
+	if err := exec.Command("reg", "add", ipRouterKey, "/v", "IPEnableRouter", "/t", "REG_DWORD", "/d", "1", "/f").Run(); err != nil {
+		return fmt.Errorf("enable IP routing (IPEnableRouter): %w", err)
 	}
 	w.set = true
-	if w.uplinkIface != "" {
-		logInfo("intercept", "IPv4 forwarding enabled to route printer(%q) <-> internet(%q). "+
-			"Different-subnet uplink also needs NAT: enable Internet Connection Sharing on the internet adapter (share to the printer adapter).",
-			w.printerIface, w.uplinkIface)
-	} else {
-		logInfo("intercept", "IPv4 forwarding enabled (transparent pass-through)")
-	}
+	logWarn("intercept", "enabled global IP routing to relay the printer to the internet (printer=%q uplink=%q). "+
+		"IPEnableRouter takes full effect after a reboot or restarting the 'Routing and Remote Access' service; for an immediate transparent relay, enable per-interface forwarding / ICS. "+
+		"Different-subnet uplink also needs NAT — turn on Internet Connection Sharing on the internet adapter.",
+		w.printerIface, w.uplinkIface)
 	return nil
 }
 
 func (w *winForwarding) Restore() error {
-	if !w.set { // we didn't enable it (already on, or never set) — nothing to undo
+	if !w.set { // already on before us, or never set — nothing to undo
 		return nil
 	}
-	if err := exec.Command("netsh", "interface", "ipv4", "set", "global", "forwarding=disabled").Run(); err != nil {
+	restore := w.prior
+	if restore == "" { // value was absent before; remove our addition by zeroing
+		restore = "0"
+	}
+	if err := exec.Command("reg", "add", ipRouterKey, "/v", "IPEnableRouter", "/t", "REG_DWORD", "/d", restore, "/f").Run(); err != nil {
 		return err
 	}
-	logInfo("intercept", "IPv4 forwarding restored to disabled")
+	logInfo("intercept", "global IP routing (IPEnableRouter) restored to %s", restore)
 	return nil
+}
+
+// regIPEnableRouter returns the current IPEnableRouter value as "0"/"1", or ""
+// if the value is absent or unreadable.
+func regIPEnableRouter() string {
+	out, err := exec.Command("reg", "query", ipRouterKey, "/v", "IPEnableRouter").Output()
+	if err != nil {
+		return ""
+	}
+	fields := strings.Fields(string(out))
+	for i, tok := range fields {
+		if strings.EqualFold(tok, "IPEnableRouter") && i+2 < len(fields) {
+			if strings.HasSuffix(strings.ToLower(fields[i+2]), "x1") {
+				return "1"
+			}
+			return "0"
+		}
+	}
+	return ""
 }
