@@ -190,6 +190,59 @@ func TestMatchExpr(t *testing.T) {
 	}
 }
 
+func fieldVal(d packetDetail, layer, field string) (string, bool) {
+	for _, l := range d.Layers {
+		if l.Name != layer {
+			continue
+		}
+		for _, f := range l.Fields {
+			if f.Name == field {
+				return f.Value, true
+			}
+		}
+	}
+	return "", false
+}
+
+func TestDissectDetailTCP(t *testing.T) {
+	d := dissectDetail(linkTypeEthernet, ethIPv4TCP("10.0.0.1", "10.0.0.9", 50000, 9100, 7, tcpFlagACK, []byte("hello")))
+	if v, _ := fieldVal(d, "Internet Protocol v4", "Source"); v != "10.0.0.1" {
+		t.Errorf("IPv4 source = %q", v)
+	}
+	if v, _ := fieldVal(d, "Internet Protocol v4", "Protocol"); v != "6 (TCP)" {
+		t.Errorf("IPv4 protocol = %q", v)
+	}
+	if v, _ := fieldVal(d, "Transmission Control Protocol", "Destination port"); v != "9100" {
+		t.Errorf("TCP dport = %q", v)
+	}
+	if _, ok := fieldVal(d, "Ethernet II", "Source"); !ok {
+		t.Error("missing Ethernet layer")
+	}
+	if d.Hex == "" {
+		t.Error("missing hex dump")
+	}
+}
+
+func TestDissectDetailARP(t *testing.T) {
+	d := dissectDetail(linkTypeEthernet, ethARP(1, "10.0.0.1", "10.0.0.9"))
+	if v, _ := fieldVal(d, "Address Resolution Protocol", "Opcode"); v != "1 (request)" {
+		t.Errorf("ARP opcode = %q", v)
+	}
+	if v, _ := fieldVal(d, "Address Resolution Protocol", "Target IP"); v != "10.0.0.9" {
+		t.Errorf("ARP target IP = %q", v)
+	}
+}
+
+func TestHexDump(t *testing.T) {
+	out := hexDump([]byte("AB"))
+	if want := "0000  41 42"; len(out) < len(want) || out[:len(want)] != want {
+		t.Errorf("hexDump = %q", out)
+	}
+	if !strings.Contains(out, "AB") {
+		t.Errorf("hexDump missing ASCII column: %q", out)
+	}
+}
+
 func TestSortPackets(t *testing.T) {
 	mk := func() []packetSummary {
 		return []packetSummary{{No: 1, Len: 300, Proto: "UDP"}, {No: 2, Len: 100, Proto: "TCP"}, {No: 3, Len: 200, Proto: "ARP"}}

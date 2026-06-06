@@ -688,6 +688,9 @@ Two places show the captured packets, with the same live view + reassembly:
     len ipver            e.g.  len>100         ipver!=6
   Operators: ==  !=  ~ (contains)  and  >  <  >=  <=  for numbers.
   The "Hide IPv6" checkbox is a quick shortcut for ipver!=6 in the view.
+- PACKET DETAILS: select a row and click "Packet details" (or click the # in the
+  web viewer) for a full layered decode — Ethernet/ARP/IP/TCP/UDP/ICMP fields
+  plus a hex+ASCII dump, like Wireshark's detail pane.
 - COLOR CODING: errors and resets are RED; print jobs (raw/9100, LPR, IPP) and
   SNMP are GREEN; HTTPS (443) is BLUE.
 - ROW TYPES: TCP/UDP/ICMP rows are decoded; ARP rows show who-has/is-at (you'll

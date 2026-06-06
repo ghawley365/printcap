@@ -90,6 +90,19 @@ func (t *liveTap) since(cursor uint64, limit int) (recs []liveRec, link int, new
 	return out, link, newCursor, firstIdx + uint64(off) + 1, dropped // 1-based ordinal
 }
 
+// at returns the retained frame at 1-based ordinal `no` (the same number shown in
+// the live view), if it is still in the ring. The bytes are header-truncated
+// (liveSnapLen), enough for the packet-detail view.
+func (t *liveTap) at(no uint64) (liveRec, int, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	firstIdx := t.seq - uint64(len(t.buf)) // absolute index of buf[0]
+	if no < firstIdx+1 || no > t.seq {
+		return liveRec{}, t.link, false
+	}
+	return t.buf[int(no-1-firstIdx)], t.link, true
+}
+
 // stats reports the current cursor and ring depth (for the UI header).
 func (t *liveTap) stats() (seq uint64, depth int) {
 	t.mu.Lock()

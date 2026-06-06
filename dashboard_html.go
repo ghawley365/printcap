@@ -90,6 +90,8 @@ const dashboardHTML = `<!doctype html>
   .svc{background:var(--line);color:var(--accent);border-radius:3px;padding:0 5px;font-size:11px;}
   span.ipf{cursor:pointer;text-decoration:underline dotted;text-underline-offset:2px;}
   span.ipf:hover{color:var(--accent);}
+  span.pktno{cursor:pointer;text-decoration:underline dotted;text-underline-offset:2px;}
+  span.pktno:hover{color:var(--accent);}
   #capLiveStat{align-self:center;color:var(--good);font-weight:600;}
   tr.pc-red td{color:#f85149;font-weight:600;}
   tr.pc-green td{color:#3fb950;}
@@ -514,7 +516,8 @@ function capRowHTML(x){
   var follow=(x.proto==='TCP'&&x.src&&x.dst)?(' data-a="'+esc(x.src)+'" data-b="'+esc(x.dst)+'" title="click: follow TCP stream"'):'';
   var cls=x.color?(' class="pc-'+esc(x.color)+'"'):'';
   return '<tr'+cls+follow+'>'
-    +'<td>'+x.no+'</td><td>'+esc(x.time)+'</td><td>'+esc(x.proto)+svcTag(x.svc)+'</td>'
+    +'<td><span class="pktno" data-no="'+x.no+'" title="click: full packet details">'+x.no+'</span></td>'
+    +'<td>'+esc(x.time)+'</td><td>'+esc(x.proto)+svcTag(x.svc)+'</td>'
     +'<td>'+ipCell(x.src)+'</td><td>'+ipCell(x.dst)+'</td>'
     +'<td>'+esc(x.len)+'</td><td>'+esc(x.info)+'</td></tr>';
 }
@@ -535,6 +538,10 @@ function capAttachFollow(){
   });
   Array.prototype.forEach.call(document.querySelectorAll('#capTable tr[data-a]'),function(tr){
     tr.onclick=function(){openStream(tr.getAttribute('data-a'),tr.getAttribute('data-b'));};
+  });
+  // Click the packet number to open the full per-packet detail popup.
+  Array.prototype.forEach.call(document.querySelectorAll('#capTable span.pktno'),function(sp){
+    sp.onclick=function(e){e.stopPropagation();openPacketDetail(sp.getAttribute('data-no'));};
   });
   // Click an IP to filter to that address (stops the row's follow-stream click).
   Array.prototype.forEach.call(document.querySelectorAll('#capTable span.ipf'),function(sp){
@@ -682,6 +689,25 @@ function openStream(a,b){
   fetch('api/capture/stream?a='+encodeURIComponent(a)+'&b='+encodeURIComponent(b))
   .then(function(r){return r.json();}).then(function(d){lastStream=d;renderStream('auto');})
   .catch(function(e){alert('Follow stream failed: '+e);});
+}
+function openPacketDetail(no){
+  fetch('api/capture/packet?no='+encodeURIComponent(no)+(capState.live?'&live=1':''))
+  .then(function(r){if(!r.ok)throw r.status;return r.json();}).then(renderPacketDetail)
+  .catch(function(e){alert('Packet details unavailable ('+e+')'+(capState.live?' — it may have scrolled out of the live buffer; pause and retry.':''));});
+}
+function renderPacketDetail(d){
+  var html='<button class="close" id="modalClose">✕ close</button><h3>Packet #'+d.no+' details</h3>'
+    +'<div class="muted">'+esc(d.summary||'')+' · '+d.len+' bytes</div>';
+  (d.layers||[]).forEach(function(l){
+    html+='<div style="margin-top:10px;font-weight:600;color:var(--accent);">'+esc(l.name)+'</div>';
+    html+='<table class="cap"><tbody>'+(l.fields||[]).map(function(f){
+      return '<tr><td class="muted" style="width:170px;">'+esc(f.name)+'</td><td>'+esc(f.value)+'</td></tr>';
+    }).join('')+'</tbody></table>';
+  });
+  html+='<div style="margin-top:12px;font-weight:600;">Hex</div><div class="preview">'+esc(d.hex||'')+'</div>';
+  document.getElementById('modal').innerHTML=html;
+  document.getElementById('overlay').classList.add('show');
+  document.getElementById('modalClose').onclick=closeDetail;
 }
 
 // ---- settings editor (full config parity) ----

@@ -35,6 +35,7 @@ func dashboardHandler() http.Handler {
 	mux.HandleFunc("/api/capturefile", apiCaptureFile)
 	mux.HandleFunc("/api/capture/stream", apiCaptureStream)
 	mux.HandleFunc("/api/capture/live", apiCaptureLive)
+	mux.HandleFunc("/api/capture/packet", apiCapturePacket)
 	mux.HandleFunc("/api/job", apiJobData)
 	mux.HandleFunc("/api/jobpreview", apiJobPreview)
 	mux.HandleFunc("/api/jobdelete", apiJobDelete)
@@ -201,6 +202,44 @@ func apiCaptureLive(w http.ResponseWriter, r *http.Request) {
 		"depth":   depth,
 		"running": engine.Running() && interceptModule != nil,
 	})
+}
+
+// apiCapturePacket returns the full layered decode + hex dump of a single packet
+// by its number. ?live=1 reads the in-memory ring (header bytes); otherwise it
+// re-reads the pcap and locates the Nth record.
+func apiCapturePacket(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	no := atoiDefault(r.URL.Query().Get("no"), 0)
+	if no < 1 {
+		http.Error(w, "bad packet number", http.StatusBadRequest)
+		return
+	}
+	if r.URL.Query().Get("live") != "" {
+		rec, link, ok := captureLive.at(uint64(no))
+		if !ok {
+			http.Error(w, "packet no longer in the live buffer", http.StatusNotFound)
+			return
+		}
+		d := dissectDetail(link, rec.data)
+		d.No, d.Len = no, rec.origLen
+		writeJSON(w, &d)
+		return
+	}
+	data, err := readPcap(interceptPcapPath(cfg.Intercept), maxCaptureParse)
+	if err != nil {
+		http.Error(w, "cannot read capture: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if no > len(data.packets) {
+		http.Error(w, "packet not found", http.StatusNotFound)
+		return
+	}
+	d := dissectDetail(data.linkType, data.packets[no-1].data)
+	d.No = no
+	writeJSON(w, &d)
 }
 
 // apiCaptureFile streams the raw interceptor pcap as a download.

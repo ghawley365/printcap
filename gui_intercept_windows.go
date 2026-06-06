@@ -249,7 +249,9 @@ var (
 // packetTableModel backs the live packet TableView.
 type packetTableModel struct {
 	walk.TableModelBase
-	rows []packetSummary
+	rows   []packetSummary
+	frames [][]byte // raw (header-truncated) bytes per row, for the detail popup
+	link   int      // link type of the capture (for dissecting frames)
 }
 
 func (m *packetTableModel) RowCount() int { return len(m.rows) }
@@ -327,6 +329,7 @@ func showCaptureWindow() {
 					dec.Label{Text: "Printer adapter:"},
 					dec.ComboBox{AssignTo: &cwIface, Model: labels, MinSize: dec.Size{Width: 320}},
 					dec.PushButton{AssignTo: &cwStartBtn, Text: "▶ Start capture", OnClicked: onCaptureStartStop},
+					dec.PushButton{Text: "Packet details", OnClicked: onCapturePacketDetail},
 					dec.PushButton{Text: "Clear", OnClicked: onCaptureClear},
 					dec.PushButton{Text: "Open .pcap folder", OnClicked: openFolder},
 					dec.HSpacer{},
@@ -369,7 +372,7 @@ func showCaptureWindow() {
 				Model:           captureModel,
 				OnItemActivated: onCaptureFollow,
 			},
-			dec.Label{AssignTo: &cwStatus, Text: "Idle. Pick an adapter and Start. Double-click a TCP row to follow/reassemble its stream. (Live capture needs an Npcap build on Windows.)"},
+			dec.Label{AssignTo: &cwStatus, Text: "Idle. Pick an adapter and Start. Double-click a TCP row to follow its stream, or select a row and click \"Packet details\" for the full decode. (Live capture needs an Npcap build on Windows.)"},
 		},
 	}).Create()
 	if err != nil || captureWin == nil {
@@ -400,6 +403,7 @@ func onCaptureClear() {
 		return
 	}
 	captureModel.rows = nil
+	captureModel.frames = nil
 	captureModel.PublishRowsReset()
 }
 
@@ -464,6 +468,7 @@ func onCaptureStartStop() {
 	}
 	captureCursor = 0
 	captureModel.rows = nil
+	captureModel.frames = nil
 	captureModel.PublishRowsReset()
 	startCapturePolling()
 	cwStartBtn.SetText("■ Stop capture")
@@ -496,6 +501,7 @@ func pumpCaptureRows() {
 	}
 	recs, link, cursor, firstNo, dropped := captureLive.since(captureCursor, 2000)
 	captureCursor = cursor
+	captureModel.link = link
 	f := captureFilter{q: strings.TrimSpace(cwFilter.Text())}
 	if cwNoV6 != nil && cwNoV6.Checked() {
 		f.noV6 = true // immediate view filter (capture-time drop applies on next Start)
@@ -512,10 +518,12 @@ func pumpCaptureRows() {
 		s.Time = rec.ts.Format("15:04:05.000")
 		if captureMatch(s, f) {
 			captureModel.rows = append(captureModel.rows, s)
+			captureModel.frames = append(captureModel.frames, append([]byte(nil), rec.data...))
 		}
 	}
 	if len(captureModel.rows) > 5000 {
 		captureModel.rows = captureModel.rows[len(captureModel.rows)-5000:]
+		captureModel.frames = captureModel.frames[len(captureModel.frames)-5000:]
 	}
 	captureModel.PublishRowsReset()
 	if n := len(captureModel.rows); n > 0 {
@@ -557,6 +565,26 @@ func onCaptureFollow() {
 	fmt.Fprintf(&sb, "\r\n\r\n=== %s -> %s  (%d bytes, server to client) ===\r\n", b, a, len(ba))
 	sb.WriteString(sanitizeStream(ba))
 	showTextWindow("Follow TCP stream — "+r.Src+" / "+r.Dst, sb.String())
+}
+
+// onCapturePacketDetail shows the full layered decode + hex dump of the selected
+// packet (the same per-packet detail as the dashboard's popup).
+func onCapturePacketDetail() {
+	if captureModel == nil {
+		return
+	}
+	i := captureTV.CurrentIndex()
+	if i < 0 || i >= len(captureModel.frames) {
+		walk.MsgBox(captureWin, "Packet details", "Select a packet row first.", walk.MsgBoxIconInformation)
+		return
+	}
+	d := dissectDetail(captureModel.link, captureModel.frames[i])
+	d.No = captureModel.rows[i].No
+	// The live ring keeps only header bytes; note when the wire frame was longer.
+	if full := captureModel.rows[i].Len; full > d.Len {
+		d.Hex += fmt.Sprintf("\n(showing first %d of %d bytes — download the .pcap for the full payload)\n", d.Len, full)
+	}
+	showTextWindow(fmt.Sprintf("Packet #%d details", d.No), detailText(d))
 }
 
 // sanitizeStream renders captured bytes as readable text (control bytes -> '.'),
