@@ -263,6 +263,7 @@ func buildWindow() error {
 					ebcdicTab(),
 					forwardTab(),
 					dlpTab(),
+					captureTab(),
 					loggingTab(),
 					serviceTab(),
 				},
@@ -853,6 +854,7 @@ func refreshUIFromConfig() {
 	uiSyslogFacility.SetValue(float64(cfg.Log.Syslog.Facility))
 	uiSyslogApp.SetText(cfg.Log.Syslog.AppName)
 	uiSyslogRFC5424.SetChecked(cfg.Log.Syslog.RFC5424)
+	refreshInterceptUI()
 }
 
 // applyUIToConfig pulls every widget back into the live cfg. Nested list/map
@@ -975,6 +977,7 @@ func applyUIToConfig() []string {
 	cfg.Log.Syslog.Facility = int(uiSyslogFacility.Value())
 	cfg.Log.Syslog.AppName = strings.TrimSpace(uiSyslogApp.Text())
 	cfg.Log.Syslog.RFC5424 = uiSyslogRFC5424.Checked()
+	applyInterceptUI()
 	configureLogging() // re-apply level, format, JSON-lines, and syslog live
 	return jsonErrs
 }

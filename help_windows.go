@@ -607,7 +607,10 @@ addressed to printcap. Use it only on networks you have written authorization to
 capture on. Misuse may be illegal.
 
 ENABLING
-- Run with -intercept (or set intercept.enabled in the config).
+- In the GUI: the "Capture" tab — tick "Enable network interception", pick the
+  capture adapter (the list is pre-filled with this machine's adapters), and fill
+  in the authorization. Or click "Open Capture Window" for a live packet view.
+- Headless: run with -intercept (or set intercept.enabled in the config).
 - It REFUSES TO START until you record an authorization: acknowledge it and set
   an operator name and an engagement/ticket reference
   (-authorize -operator NAME -engagement TICKET). An optional expiry date stops
@@ -631,7 +634,15 @@ Stays OFF unless you list explicit target IPs — there is NO whole-subnet mode.
 acts only on the hosts you list (and the gateway) and restores their ARP caches
 on stop. macOS/Linux capture is strictly passive (a read-only tap; no ARP).
 
-VIEWING CAPTURES — the Dashboard "Captures" window
+VIEWING CAPTURES
+Two places show the captured packets, with the same live view + reassembly:
+- The GUI "Capture Window" (Capture tab -> Open Capture Window): a live, color-
+  coded packet table. Double-click a TCP row to follow/reassemble its stream.
+  NOTE: this window shows packets only when the engine runs IN-PROCESS (this GUI),
+  not when printcap runs as the installed Windows service (separate process) — use
+  the dashboard on the service host for that.
+- The web Dashboard "Captures" panel (same features, reachable from any browser).
+
 - GO LIVE: a real-time, scrolling packet view fed as packets arrive (pause /
   clear / auto-scroll; shows "missed N" if a burst overruns the buffer).
   "Refresh (static)" instead reads the saved pcap.

@@ -867,9 +867,15 @@ on stop. With an empty `targets` list, positioning stays **off** regardless of
 
 ### Viewing captures
 
-The dashboard's **Captures** panel renders the pcap as a color-coded, filterable
-packet list (resets and ICMP errors highlighted; filter by class/protocol/text)
-and offers a raw `.pcap` download. See §12.
+Two windows show the captured packets with the same live view, filtering, and
+TCP stream reassembly:
+
+* **GUI Capture Window** — from the GUI's **Capture** tab, click **Open Capture
+  Window**. It has a pre-filled adapter picker, Start/Stop, a live color-coded
+  packet table, and double-click-to-follow-stream. It shows packets only when the
+  engine runs **in-process** (this GUI), not when printcap runs as the installed
+  **service** (a separate process) — use the dashboard on the service host then.
+* **Dashboard "Captures" panel** — the same, reachable from any browser. See §12.
 
 ---
 
