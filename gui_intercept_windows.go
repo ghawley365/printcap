@@ -105,7 +105,7 @@ func captureTab() dec.TabPage {
 				Title:  "Packet capture",
 				Layout: dec.Grid{Columns: 2},
 				Children: []dec.Widget{
-					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiIntEnabled, Text: "Enable network interception"},
+					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiIntEnabled, Text: "Enable network interception", OnClicked: onEnableInterceptClicked},
 					dec.Label{Text: "Capture adapter:"}, dec.ComboBox{AssignTo: &uiIntIface, Model: labels},
 					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiIntPromisc, Text: "Promiscuous mode"},
 				},
@@ -145,6 +145,14 @@ func captureTab() dec.TabPage {
 			},
 			dec.VSpacer{},
 		},
+	}
+}
+
+// onEnableInterceptClicked nudges the user to install Npcap when they turn on
+// interception and the live-capture prerequisites aren't met.
+func onEnableInterceptClicked() {
+	if uiIntEnabled != nil && uiIntEnabled.Checked() && (!captureBuilt || !npcapInstalled()) {
+		ensureNpcap(mw)
 	}
 }
 
@@ -328,6 +336,9 @@ func showCaptureWindow() {
 		stopCapturePolling()
 		captureWin = nil
 	})
+	if captureBuilt && !npcapInstalled() {
+		cwStatus.SetText("⚠ Npcap not detected — you'll be prompted to install it when you click Start.")
+	}
 	captureWin.Show()
 }
 
@@ -369,6 +380,11 @@ func onCaptureStartStop() {
 		walk.MsgBox(captureWin, "Live capture unavailable in service mode",
 			"printcap is installed as a Windows service, so capture runs in the service process and this window cannot show its packets live.\n\nEither remove/stop the service and capture from this GUI, or open the web dashboard's Captures view on the service host.",
 			walk.MsgBoxIconWarning)
+		return
+	}
+
+	// Npcap is required for live capture; prompt to install it if it's missing.
+	if !ensureNpcap(captureWin) {
 		return
 	}
 

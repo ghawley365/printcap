@@ -74,6 +74,24 @@ jobs:
           go build -tags npcap -ldflags "-X main.version=$env:VERSION" -o printcap.exe .
           Get-Item printcap.exe | Select-Object Name,Length | Out-Host
 
+      - name: Bundle the Npcap installer into the artifact
+        continue-on-error: true # a download hiccup must not fail the build
+        shell: pwsh
+        env:
+          NPCAP_VERSION: "1.79"
+        run: |
+          # printcap detects a missing Npcap and offers to run this installer.
+          # NOTE: Npcap's free license RESTRICTS redistribution. Bundling/
+          # shipping the installer may require an Npcap OEM license — review
+          # https://npcap.com/oem/ before distributing artifacts that include it.
+          $url = "https://npcap.com/dist/npcap-$env:NPCAP_VERSION.exe"
+          try {
+            Invoke-WebRequest -Uri $url -OutFile npcap-installer.exe -UseBasicParsing
+            Get-Item npcap-installer.exe | Select-Object Name,Length | Out-Host
+          } catch {
+            Write-Host "Npcap installer download failed ($_); artifact will omit it (the app falls back to the download page)."
+          }
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -81,4 +99,5 @@ jobs:
           path: |
             printcap.exe
             printcap-nocapture.exe
+            npcap-installer.exe
           if-no-files-found: error

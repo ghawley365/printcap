@@ -16,6 +16,8 @@ printcap.log
 Archive.zip
 *.zip
 
-# Npcap SDK pulled in by the Windows CI build.
+# Npcap SDK + installer pulled in by the Windows CI build.
 npcap-sdk/
 npcap-sdk.zip
+npcap-installer.exe
+npcap-*.exe
