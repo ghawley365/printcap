@@ -88,6 +88,8 @@ const dashboardHTML = `<!doctype html>
   #capTable.live{max-height:540px;overflow:auto;border:1px solid var(--line);border-radius:6px;}
   #capTable.live thead th{position:sticky;top:0;background:var(--panel);}
   .svc{background:var(--line);color:var(--accent);border-radius:3px;padding:0 5px;font-size:11px;}
+  span.ipf{cursor:pointer;text-decoration:underline dotted;text-underline-offset:2px;}
+  span.ipf:hover{color:var(--accent);}
   #capLiveStat{align-self:center;color:var(--good);font-weight:600;}
   tr.pc-red td{color:#f85149;font-weight:600;}
   tr.pc-green td{color:#3fb950;}
@@ -126,6 +128,17 @@ const dashboardHTML = `<!doctype html>
 
   <div class="panel" id="capturePanel" style="display:none;">
     <h2>Network capture <span class="muted" id="capInfo"></span></h2>
+    <p class="muted" style="margin:0 0 10px;">Every packet on the capture adapter (intercept mode). Type a filter to narrow it down, click a TCP row to read the conversation, or <a class="dl" href="api/capturefile">download the .pcap</a> for Wireshark. <a class="dl" id="capHelpToggle" href="#">show filter help ▾</a></p>
+    <div id="capHelp" style="display:none;" class="logbox">Type terms separated by spaces — all must match (AND). A plain word matches anywhere in the row.
+Fields:  src  dst  addr (src OR dst)  ·  sport  dport  port  ·  proto  svc  class  ·  len  ipver
+Operators:  ==  (equals)   !=  (not)   ~  (contains)   and  &gt; &lt; &gt;= &lt;=  for numbers
+Examples:
+  addr==10.0.0.50          only the MFP at 10.0.0.50
+  port==9100               print (raw/JetDirect) traffic
+  proto==arp               ARP (who-has / is-at)
+  svc==http                printer web/API (HTTP)
+  ipver!=6                 hide IPv6
+  dst==10.0.0.50 len&gt;200   big packets to the MFP</div>
     <div class="caplegend">
       <span><i style="background:#f85149"></i>errors &amp; resets</span>
       <span><i style="background:#3fb950"></i>print jobs &amp; SNMP</span>
@@ -470,12 +483,14 @@ function capFilters(p){
   return p;
 }
 function svcTag(s){return s?(' <span class="svc">'+esc(s)+'</span>'):'';}
+function ipPart(s){if(!s)return '';if(s.charAt(0)==='['){return s.slice(1,s.indexOf(']'));}var i=s.lastIndexOf(':');return i>0?s.slice(0,i):s;}
+function ipCell(s){var ip=ipPart(s);return ip?('<span class="ipf" data-ip="'+esc(ip)+'" title="click: filter to this address">'+esc(s)+'</span>'):'—';}
 function capRowHTML(x){
   var follow=(x.proto==='TCP'&&x.src&&x.dst)?(' data-a="'+esc(x.src)+'" data-b="'+esc(x.dst)+'" title="click: follow TCP stream"'):'';
   var cls=x.color?(' class="pc-'+esc(x.color)+'"'):'';
   return '<tr'+cls+follow+'>'
     +'<td>'+x.no+'</td><td>'+esc(x.time)+'</td><td>'+esc(x.proto)+svcTag(x.svc)+'</td>'
-    +'<td>'+esc(x.src||'—')+'</td><td>'+esc(x.dst||'—')+'</td>'
+    +'<td>'+ipCell(x.src)+'</td><td>'+ipCell(x.dst)+'</td>'
     +'<td>'+esc(x.len)+'</td><td>'+esc(x.info)+'</td></tr>';
 }
 function capTableHTML(list){
@@ -485,6 +500,10 @@ function capTableHTML(list){
 function capAttachFollow(){
   Array.prototype.forEach.call(document.querySelectorAll('#capTable tr[data-a]'),function(tr){
     tr.onclick=function(){openStream(tr.getAttribute('data-a'),tr.getAttribute('data-b'));};
+  });
+  // Click an IP to filter to that address (stops the row's follow-stream click).
+  Array.prototype.forEach.call(document.querySelectorAll('#capTable span.ipf'),function(sp){
+    sp.onclick=function(e){e.stopPropagation();document.getElementById('capQ').value='addr=='+sp.getAttribute('data-ip');capState.q='addr=='+sp.getAttribute('data-ip');capFilterChanged();};
   });
 }
 
@@ -524,8 +543,9 @@ function pollLive(){
       if(capState.rows.length>2000)capState.rows=capState.rows.slice(capState.rows.length-2000);
       renderLive();
     }
-    document.getElementById('capLiveStat').textContent='● LIVE · '+(d.running?'capturing':'intercept not running')
-      +' · '+(d.total||0)+' pkts'+(capState.dropped?(' · missed '+capState.dropped):'');
+    document.getElementById('capLiveStat').textContent= d.running
+      ? ('● LIVE · capturing · '+(d.total||0)+' pkts'+(capState.dropped?(' · missed '+capState.dropped):''))
+      : '⚠ not capturing — turn on intercept mode in Settings (and on Windows install Npcap), then Start the engine';
   }).catch(function(){});
   if(capState.live)capState.timer=setTimeout(pollLive,1000);
 }
@@ -566,6 +586,9 @@ document.getElementById('capSvc').addEventListener('change',function(){capState.
 document.getElementById('capClass').addEventListener('change',function(){capState.cls=this.value;capFilterChanged();});
 document.getElementById('capProto').addEventListener('change',function(){capState.proto=this.value;capFilterChanged();});
 document.getElementById('capNoV6').addEventListener('change',function(){capState.nov6=this.checked;capFilterChanged();});
+document.getElementById('capHelpToggle').onclick=function(e){e.preventDefault();
+  var h=document.getElementById('capHelp');var show=h.style.display==='none';
+  h.style.display=show?'':'none';this.textContent=show?'hide filter help ▴':'show filter help ▾';};
 document.getElementById('capPageSize').addEventListener('change',function(){capState.limit=parseInt(this.value,10)||500;capState.offset=0;if(!capState.live)loadCapture();});
 document.getElementById('capPrev').onclick=function(){capState.offset=Math.max(0,capState.offset-capState.limit);loadCapture();};
 document.getElementById('capNext').onclick=function(){if(capState.offset+capState.limit<capState.matched){capState.offset+=capState.limit;loadCapture();}};

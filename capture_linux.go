@@ -91,6 +91,9 @@ func openLiveSource(c InterceptConf) (packetSource, error) {
 		iface = d
 	}
 
+	if c.BPF != "" {
+		logWarn("intercept", "intercept.bpf (%q) is ignored on Linux — capture-time BPF filtering is Windows/Npcap-only; use the viewer's display filter instead", c.BPF)
+	}
 	fd, err := unix.Socket(unix.AF_PACKET, unix.SOCK_RAW, int(htons(ethPAll)))
 	if err != nil {
 		return nil, fmt.Errorf("intercept: AF_PACKET socket (need root or CAP_NET_RAW): %w", err)

@@ -71,7 +71,7 @@ type InterceptConf struct {
 	ICSPublic   string `json:"ics_public"`       // Windows ICS: internet connection NAME (e.g. "Wi-Fi"); blank = no auto-ICS
 	ICSPrivate  string `json:"ics_private"`      // Windows ICS: printer-side connection NAME (e.g. "Ethernet")
 	PcapFile    string `json:"pcap_file"`        // output libpcap path; blank = "<out_dir>/capture.pcap"
-	BPF         string `json:"bpf"`              // optional libpcap capture filter ("" = everything)
+	BPF         string `json:"bpf"`              // capture-time libpcap filter — WINDOWS/Npcap ONLY (ignored on macOS/Linux; use the viewer's display filter there)
 	SnapLen     int    `json:"snaplen"`          // bytes captured per frame (0 = full frame)
 	Promiscuous bool   `json:"promiscuous"`      // put the NIC in promiscuous mode
 	IPForward   bool   `json:"ip_forward"`       // enable OS IP forwarding while active (restored on stop)

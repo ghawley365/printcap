@@ -228,6 +228,15 @@ func printBanner(n int) {
 			fmt.Printf("    - %s: %s\n", name, reason)
 		}
 	}
+	if cfg.Intercept.Enabled {
+		if interceptModule != nil {
+			fmt.Printf("  intercept  : capturing to %s\n", interceptPcapPath(cfg.Intercept))
+		} else {
+			fmt.Println("  intercept  : NOT capturing — live capture needs an Npcap build on Windows")
+			fmt.Println("               (build with -tags=npcap + install Npcap), or root/access_bpf")
+			fmt.Println("               (macOS) / CAP_NET_RAW (Linux). See the log for the exact reason.")
+		}
+	}
 	if n == 0 {
 		fmt.Println("  WARNING: no listeners started (check ports/permissions)")
 	}

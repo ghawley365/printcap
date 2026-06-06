@@ -152,6 +152,9 @@ func openLiveSource(c InterceptConf) (packetSource, error) {
 		}
 		iface = d
 	}
+	if c.BPF != "" {
+		logWarn("intercept", "intercept.bpf (%q) is ignored on macOS — capture-time BPF filtering is Windows/Npcap-only; use the viewer's display filter instead", c.BPF)
+	}
 
 	fd, err := openBPFDevice()
 	if err != nil {

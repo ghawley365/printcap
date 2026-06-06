@@ -221,13 +221,6 @@ func defaultLogPath() string {
 	return filepath.Join(dir, "printcap.log")
 }
 
-func baseName(p string) string {
-	if i := strings.LastIndexAny(p, `/\`); i >= 0 {
-		return p[i+1:]
-	}
-	return p
-}
-
 // SetLevel changes the active level at runtime without rebuilding the logger
 // (used by the dashboard's live log-level control).
 func (l *Logger) SetLevel(lv Level) {

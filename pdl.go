@@ -30,10 +30,6 @@ type pdlSig struct {
 func hasPrefix(p ...byte) func([]byte) bool {
 	return func(b []byte) bool { return bytes.HasPrefix(b, p) }
 }
-func contains(sub string) func([]byte) bool {
-	s := []byte(sub)
-	return func(b []byte) bool { return bytes.Contains(b, s) }
-}
 
 // pdlTable is consulted in order against the bytes after the PJL preamble.
 var pdlTable = []pdlSig{
