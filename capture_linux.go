@@ -126,7 +126,9 @@ func openLiveSource(c InterceptConf) (packetSource, error) {
 }
 
 // newForwardingControl: passive capture needs no kernel forwarding on Linux.
-func newForwardingControl() forwardingControl { return noopForwarding{} }
+func newForwardingControl(printerIface, uplinkIface string) forwardingControl {
+	return noopForwarding{}
+}
 
 // newARPController: active ARP positioning is not offered on Linux; capture is
 // strictly passive here. The interceptor logs this and continues capture-only.

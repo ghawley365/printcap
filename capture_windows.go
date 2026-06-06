@@ -151,27 +151,51 @@ func (s *windowsLiveSource) Close() error {
 // reboot on modern builds. Treat reboot-free forwarding as host-dependent and
 // verify on the target before relying on it in an engagement.
 type winForwarding struct {
-	prior string // previous global forwarding state to restore
-	set   bool
+	printerIface string // adapter the printer/MFP is on (capture side)
+	uplinkIface  string // adapter with internet access (multi-homed); "" = single-homed
+	priorOn      bool   // global IPv4 forwarding was already enabled before us
+	set          bool   // WE enabled forwarding (so Restore should disable it)
 }
 
-func newForwardingControl() forwardingControl { return &winForwarding{} }
+func newForwardingControl(printerIface, uplinkIface string) forwardingControl {
+	return &winForwarding{printerIface: printerIface, uplinkIface: uplinkIface}
+}
 
 func (w *winForwarding) Enable() error {
-	out, err := exec.Command("netsh", "interface", "ipv4", "show", "global").Output()
-	if err == nil {
-		w.prior = strings.TrimSpace(string(out)) // best-effort snapshot for the log/audit
+	// Snapshot prior state so cleanup only undoes what we changed (don't disable
+	// forwarding a user/router had on already).
+	if out, err := exec.Command("netsh", "interface", "ipv4", "show", "global").Output(); err == nil {
+		for _, ln := range strings.Split(strings.ToLower(string(out)), "\n") {
+			if strings.Contains(ln, "forward") && strings.Contains(ln, "enabled") {
+				w.priorOn = true
+			}
+		}
+	}
+	if w.priorOn {
+		logInfo("intercept", "IPv4 forwarding was already enabled; leaving it as-is")
+		return nil
 	}
 	if err := exec.Command("netsh", "interface", "ipv4", "set", "global", "forwarding=enabled").Run(); err != nil {
 		return fmt.Errorf("netsh set global forwarding: %w", err)
 	}
 	w.set = true
+	if w.uplinkIface != "" {
+		logInfo("intercept", "IPv4 forwarding enabled to route printer(%q) <-> internet(%q). "+
+			"Different-subnet uplink also needs NAT: enable Internet Connection Sharing on the internet adapter (share to the printer adapter).",
+			w.printerIface, w.uplinkIface)
+	} else {
+		logInfo("intercept", "IPv4 forwarding enabled (transparent pass-through)")
+	}
 	return nil
 }
 
 func (w *winForwarding) Restore() error {
-	if !w.set {
+	if !w.set { // we didn't enable it (already on, or never set) — nothing to undo
 		return nil
 	}
-	return exec.Command("netsh", "interface", "ipv4", "set", "global", "forwarding=disabled").Run()
+	if err := exec.Command("netsh", "interface", "ipv4", "set", "global", "forwarding=disabled").Run(); err != nil {
+		return err
+	}
+	logInfo("intercept", "IPv4 forwarding restored to disabled")
+	return nil
 }

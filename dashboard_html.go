@@ -135,6 +135,7 @@ const dashboardHTML = `<!doctype html>
     <div class="controls">
       <input id="capQ" class="grow" placeholder="filter by IP, port, flag, info…">
       <input id="capPort" type="number" min="0" max="65535" placeholder="port" style="width:90px;">
+      <input id="capHost" placeholder="host IP (e.g. MFP)" style="width:140px;">
       <select id="capSvc">
         <option value="">any service</option>
         <option value="http">HTTP (API/EWS)</option>
@@ -454,12 +455,13 @@ function startSSE(){
 }
 
 // ---- network capture viewer (static + live) ----
-var capState={q:'',port:'',svc:'',cls:'',proto:'',offset:0,limit:500,matched:0,
+var capState={q:'',port:'',host:'',svc:'',cls:'',proto:'',offset:0,limit:500,matched:0,
               live:false,paused:false,cursor:0,rows:[],dropped:0,timer:null};
 
 function capFilters(p){
   if(capState.q)p.set('q',capState.q);
   if(capState.port)p.set('port',capState.port);
+  if(capState.host)p.set('host',capState.host);
   if(capState.svc)p.set('svc',capState.svc);
   if(capState.cls)p.set('class',capState.cls);
   if(capState.proto)p.set('proto',capState.proto);
@@ -557,6 +559,7 @@ document.getElementById('capClear').onclick=function(){ if(capState.live){capSta
 document.getElementById('capRefresh').onclick=function(){ if(capState.live)stopLive(); loadCapture(); };
 document.getElementById('capQ').addEventListener('input',function(){capState.q=this.value;clearTimeout(window._cqt);window._cqt=setTimeout(capFilterChanged,250);});
 document.getElementById('capPort').addEventListener('input',function(){capState.port=this.value;clearTimeout(window._cpt);window._cpt=setTimeout(capFilterChanged,250);});
+document.getElementById('capHost').addEventListener('input',function(){capState.host=this.value.trim();clearTimeout(window._cht);window._cht=setTimeout(capFilterChanged,250);});
 document.getElementById('capSvc').addEventListener('change',function(){capState.svc=this.value;capFilterChanged();});
 document.getElementById('capClass').addEventListener('change',function(){capState.cls=this.value;capFilterChanged();});
 document.getElementById('capProto').addEventListener('change',function(){capState.proto=this.value;capFilterChanged();});

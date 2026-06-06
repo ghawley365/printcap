@@ -225,7 +225,9 @@ func bpfSetInterface(fd int, name string) error {
 }
 
 // newForwardingControl: passive capture needs no kernel forwarding on macOS.
-func newForwardingControl() forwardingControl { return noopForwarding{} }
+func newForwardingControl(printerIface, uplinkIface string) forwardingControl {
+	return noopForwarding{}
+}
 
 // newARPController: active ARP positioning is not offered on macOS; capture is
 // strictly passive here. The interceptor logs this and continues capture-only.

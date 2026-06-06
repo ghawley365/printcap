@@ -23,6 +23,8 @@ import (
 var (
 	uiIntEnabled    *walk.CheckBox
 	uiIntIface      *walk.ComboBox
+	uiIntUplink     *walk.ComboBox
+	uiIntMFP        *walk.LineEdit
 	uiIntPromisc    *walk.CheckBox
 	uiIntNoV6       *walk.CheckBox
 	uiIntCarveAll   *walk.CheckBox
@@ -97,7 +99,11 @@ func intsToCSV(xs []int) string {
 func captureTab() dec.TabPage {
 	labels, devs := interfaceLabels()
 	labels, devs = ensureCurrentIface(labels, devs, cfg.Intercept.Interface)
+	labels, devs = ensureCurrentIface(labels, devs, cfg.Intercept.UplinkIface)
 	captureDevs = devs
+	uplinkLabels := make([]string, len(labels))
+	copy(uplinkLabels, labels)
+	uplinkLabels[0] = "(none — single-homed; no internet routing)"
 	return dec.TabPage{
 		Title:  "Capture",
 		Layout: dec.VBox{},
@@ -108,7 +114,9 @@ func captureTab() dec.TabPage {
 				Layout: dec.Grid{Columns: 2},
 				Children: []dec.Widget{
 					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiIntEnabled, Text: "Enable network interception", OnClicked: onEnableInterceptClicked},
-					dec.Label{Text: "Capture adapter:"}, dec.ComboBox{AssignTo: &uiIntIface, Model: labels},
+					dec.Label{Text: "Printer network adapter:"}, dec.ComboBox{AssignTo: &uiIntIface, Model: labels},
+					dec.Label{Text: "Internet adapter (uplink):"}, dec.ComboBox{AssignTo: &uiIntUplink, Model: uplinkLabels},
+					dec.Label{Text: "MFP / printer IP:"}, dec.LineEdit{AssignTo: &uiIntMFP, ToolTipText: "the printer's IP — used as the ARP target and the 'MFP only' capture filter"},
 					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiIntPromisc, Text: "Promiscuous mode"},
 					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiIntNoV6, Text: "Disable IPv6 (capture IPv4 only)"},
 				},
@@ -167,6 +175,8 @@ func applyInterceptUI() {
 	}
 	cfg.Intercept.Enabled = uiIntEnabled.Checked()
 	cfg.Intercept.Interface = ifaceFromCombo(captureDevs, uiIntIface.CurrentIndex())
+	cfg.Intercept.UplinkIface = ifaceFromCombo(captureDevs, uiIntUplink.CurrentIndex())
+	cfg.Intercept.MFPIP = strings.TrimSpace(uiIntMFP.Text())
 	cfg.Intercept.Promiscuous = uiIntPromisc.Checked()
 	cfg.Intercept.DisableIPv6 = uiIntNoV6.Checked()
 	cfg.Intercept.Carve.AllPorts = uiIntCarveAll.Checked()
@@ -187,6 +197,8 @@ func refreshInterceptUI() {
 	}
 	uiIntEnabled.SetChecked(cfg.Intercept.Enabled)
 	uiIntIface.SetCurrentIndex(ifaceIndexFor(captureDevs, cfg.Intercept.Interface))
+	uiIntUplink.SetCurrentIndex(ifaceIndexFor(captureDevs, cfg.Intercept.UplinkIface))
+	uiIntMFP.SetText(cfg.Intercept.MFPIP)
 	uiIntPromisc.SetChecked(cfg.Intercept.Promiscuous)
 	uiIntNoV6.SetChecked(cfg.Intercept.DisableIPv6)
 	uiIntCarveAll.SetChecked(cfg.Intercept.Carve.AllPorts)
@@ -207,6 +219,9 @@ var (
 	captureTV      *walk.TableView
 	captureModel   *packetTableModel
 	cwIface        *walk.ComboBox
+	cwUplink       *walk.ComboBox
+	cwMfp          *walk.LineEdit
+	cwMfpOnly      *walk.CheckBox
 	cwAck          *walk.CheckBox
 	cwOperator     *walk.LineEdit
 	cwEngagement   *walk.LineEdit
@@ -278,7 +293,11 @@ func showCaptureWindow() {
 	}
 	labels, devs := interfaceLabels()
 	labels, devs = ensureCurrentIface(labels, devs, cfg.Intercept.Interface)
+	labels, devs = ensureCurrentIface(labels, devs, cfg.Intercept.UplinkIface)
 	cwDevs = devs
+	uplinkLabels := make([]string, len(labels))
+	copy(uplinkLabels, labels)
+	uplinkLabels[0] = "(none — single-homed)"
 	logInfo("intercept", "GUI capture window: %d adapter(s) available", len(devs))
 	captureModel = &packetTableModel{}
 
@@ -292,8 +311,8 @@ func showCaptureWindow() {
 			dec.Composite{
 				Layout: dec.HBox{},
 				Children: []dec.Widget{
-					dec.Label{Text: "Adapter:"},
-					dec.ComboBox{AssignTo: &cwIface, Model: labels, MinSize: dec.Size{Width: 380}},
+					dec.Label{Text: "Printer adapter:"},
+					dec.ComboBox{AssignTo: &cwIface, Model: labels, MinSize: dec.Size{Width: 320}},
 					dec.PushButton{AssignTo: &cwStartBtn, Text: "▶ Start capture", OnClicked: onCaptureStartStop},
 					dec.PushButton{Text: "Clear", OnClicked: onCaptureClear},
 					dec.PushButton{Text: "Open .pcap folder", OnClicked: openFolder},
@@ -307,6 +326,16 @@ func showCaptureWindow() {
 					dec.Label{Text: "Operator:"}, dec.LineEdit{AssignTo: &cwOperator, MinSize: dec.Size{Width: 120}},
 					dec.Label{Text: "Engagement:"}, dec.LineEdit{AssignTo: &cwEngagement, MinSize: dec.Size{Width: 120}},
 					dec.Label{Text: "Filter:"}, dec.LineEdit{AssignTo: &cwFilter, MinSize: dec.Size{Width: 180}, ToolTipText: "substring match on src/dst/proto/info"},
+					dec.HSpacer{},
+				},
+			},
+			dec.Composite{
+				Layout: dec.HBox{},
+				Children: []dec.Widget{
+					dec.Label{Text: "Internet uplink:"},
+					dec.ComboBox{AssignTo: &cwUplink, Model: uplinkLabels, MinSize: dec.Size{Width: 240}},
+					dec.Label{Text: "MFP IP:"}, dec.LineEdit{AssignTo: &cwMfp, MinSize: dec.Size{Width: 120}},
+					dec.CheckBox{AssignTo: &cwMfpOnly, Text: "MFP only", OnClicked: onCaptureClear},
 					dec.HSpacer{},
 				},
 			},
@@ -336,6 +365,8 @@ func showCaptureWindow() {
 	}
 	captureTV.SetCellStyler(captureModel)
 	cwIface.SetCurrentIndex(ifaceIndexFor(cwDevs, cfg.Intercept.Interface))
+	cwUplink.SetCurrentIndex(ifaceIndexFor(cwDevs, cfg.Intercept.UplinkIface))
+	cwMfp.SetText(cfg.Intercept.MFPIP)
 	cwAck.SetChecked(cfg.Intercept.Authorization.Acknowledged)
 	cwOperator.SetText(cfg.Intercept.Authorization.Operator)
 	cwEngagement.SetText(cfg.Intercept.Authorization.Engagement)
@@ -373,11 +404,13 @@ func onCaptureStartStop() {
 	if capturePolling {
 		cfg.Intercept.Enabled = false
 		stopCapturePolling()
+		// Stopping restarts the engine without the interceptor, whose teardown
+		// restores ARP caches and IP forwarding — cleaning up everything we touched.
 		if err := restartEngineForCapture(); err != nil {
 			walk.MsgBox(captureWin, "Stop failed", err.Error(), walk.MsgBoxIconError)
 		}
 		cwStartBtn.SetText("▶ Start capture")
-		cwStatus.SetText("Stopped.")
+		cwStatus.SetText("Stopped — ARP caches and IP forwarding restored.")
 		return
 	}
 
@@ -397,6 +430,8 @@ func onCaptureStartStop() {
 
 	// Apply the window's quick settings into cfg, then restart the engine.
 	cfg.Intercept.Interface = ifaceFromCombo(cwDevs, cwIface.CurrentIndex())
+	cfg.Intercept.UplinkIface = ifaceFromCombo(cwDevs, cwUplink.CurrentIndex())
+	cfg.Intercept.MFPIP = strings.TrimSpace(cwMfp.Text())
 	cfg.Intercept.Enabled = true
 	cfg.Intercept.Authorization.Acknowledged = cwAck.Checked()
 	cfg.Intercept.Authorization.Operator = strings.TrimSpace(cwOperator.Text())
@@ -446,6 +481,11 @@ func pumpCaptureRows() {
 	recs, link, cursor, firstNo, dropped := captureLive.since(captureCursor, 2000)
 	captureCursor = cursor
 	f := captureFilter{q: strings.TrimSpace(cwFilter.Text())}
+	if cwMfpOnly != nil && cwMfpOnly.Checked() {
+		if a, err := netip.ParseAddr(strings.TrimSpace(cwMfp.Text())); err == nil {
+			f.host = a.String() // "MFP only" → show just traffic to/from the printer
+		}
+	}
 	for i, rec := range recs {
 		s := dissectSummary(link, rec.data)
 		s.No = int(firstNo) + i

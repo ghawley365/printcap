@@ -188,6 +188,15 @@ func validateIntercept(c *Config) []configIssue {
 			Fix:     "use a literal gateway IP, or leave blank to auto-detect",
 		})
 	}
+	// The MFP IP (printer) doubles as an ARP target and the "MFP only" filter, so
+	// it must be a literal IP when set.
+	if m := strings.TrimSpace(c.Intercept.MFPIP); m != "" && net.ParseIP(m) == nil {
+		issues = append(issues, configIssue{
+			Severity: sevError, Field: "intercept.mfp_ip",
+			Message: fmt.Sprintf("%q is not a valid IP", m),
+			Fix:     "set intercept.mfp_ip to the printer's literal IP address, or leave blank",
+		})
+	}
 	return issues
 }
 

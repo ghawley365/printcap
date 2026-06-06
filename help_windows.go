@@ -637,6 +637,23 @@ Stays OFF unless you list explicit target IPs — there is NO whole-subnet mode.
 acts only on the hosts you list (and the gateway) and restores their ARP caches
 on stop. macOS/Linux capture is strictly passive (a read-only tap; no ARP).
 
+MFP FOCUS
+Set "MFP / printer IP" to the printer's IP. It is auto-added as an ARP target,
+and the capture window's "MFP only" checkbox narrows the view to traffic to/from
+that IP.
+
+MULTI-HOMED (printer LAN + internet)
+Pick the "Printer network adapter" (capture/ARP side) and the "Internet adapter
+(uplink)". With IP forwarding on, the PC routes the printer's traffic toward the
+uplink so it keeps working. NOTE: if the two are different subnets you must also
+enable NAT — turn on Internet Connection Sharing on the internet adapter and
+share it to the printer adapter (printcap can't auto-configure NAT).
+
+CLEANUP
+Stop (or quitting) restores every poisoned ARP cache and returns IPv4 forwarding
+to its prior state — printcap only disables forwarding if it was the one that
+enabled it. Nothing it changed is left behind.
+
 VIEWING CAPTURES
 Two places show the captured packets, with the same live view + reassembly:
 - The GUI "Capture Window" (Capture tab -> Open Capture Window): a live, color-

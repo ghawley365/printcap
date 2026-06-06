@@ -8,7 +8,7 @@ import (
 )
 
 func TestValidateARPScopeDisabled(t *testing.T) {
-	_, _, active, err := validateARPScope(ARPConf{Enabled: false, Targets: []string{"10.0.0.5"}})
+	_, _, active, err := validateARPScope(ARPConf{Enabled: false, Targets: []string{"10.0.0.5"}}, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -19,7 +19,7 @@ func TestValidateARPScopeDisabled(t *testing.T) {
 
 func TestValidateARPScopeFailClosedNoTargets(t *testing.T) {
 	// Enabled but no targets => poisoning must stay OFF (no whole-subnet mode).
-	_, _, active, err := validateARPScope(ARPConf{Enabled: true, Targets: nil})
+	_, _, active, err := validateARPScope(ARPConf{Enabled: true, Targets: nil}, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -29,14 +29,14 @@ func TestValidateARPScopeFailClosedNoTargets(t *testing.T) {
 }
 
 func TestValidateARPScopeRejectsBadTarget(t *testing.T) {
-	if _, _, _, err := validateARPScope(ARPConf{Enabled: true, Targets: []string{"not-an-ip"}}); err == nil {
+	if _, _, _, err := validateARPScope(ARPConf{Enabled: true, Targets: []string{"not-an-ip"}}, ""); err == nil {
 		t.Fatal("expected error for invalid target IP")
 	}
 }
 
 func TestValidateARPScopeRejectsLoopbackAndMulticast(t *testing.T) {
 	for _, bad := range []string{"127.0.0.1", "224.0.0.1", "0.0.0.0"} {
-		if _, _, _, err := validateARPScope(ARPConf{Enabled: true, Targets: []string{bad}}); err == nil {
+		if _, _, _, err := validateARPScope(ARPConf{Enabled: true, Targets: []string{bad}}, ""); err == nil {
 			t.Errorf("target %q should be refused", bad)
 		}
 	}
@@ -47,7 +47,7 @@ func TestValidateARPScopeDedupAndGateway(t *testing.T) {
 		Enabled: true,
 		Gateway: "192.168.1.1",
 		Targets: []string{"192.168.1.50", "192.168.1.50", "192.168.1.51"},
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -63,8 +63,19 @@ func TestValidateARPScopeDedupAndGateway(t *testing.T) {
 }
 
 func TestValidateARPScopeRejectsBadGateway(t *testing.T) {
-	if _, _, _, err := validateARPScope(ARPConf{Enabled: true, Gateway: "nope", Targets: []string{"10.0.0.2"}}); err == nil {
+	if _, _, _, err := validateARPScope(ARPConf{Enabled: true, Gateway: "nope", Targets: []string{"10.0.0.2"}}, ""); err == nil {
 		t.Fatal("expected error for invalid gateway IP")
+	}
+}
+
+func TestValidateARPScopeIncludesMFP(t *testing.T) {
+	// The MFP IP becomes an in-scope ARP target even with no explicit targets.
+	targets, _, active, err := validateARPScope(ARPConf{Enabled: true}, "192.168.1.50")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !active || len(targets) != 1 || targets[0].String() != "192.168.1.50" {
+		t.Fatalf("MFP not adopted as ARP target: active=%v targets=%v", active, targets)
 	}
 }
 

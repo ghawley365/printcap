@@ -870,6 +870,34 @@ an explicit `targets` allow-list of host IPs and restores every cache it touched
 on stop. With an empty `targets` list, positioning stays **off** regardless of
 `enabled` (capture-only). `-check` validates the target/gateway IPs.
 
+### MFP focus (`intercept.mfp_ip`)
+
+Set the printer's IP in `intercept.mfp_ip` (or the GUI "MFP / printer IP" field).
+It is used two ways: it is automatically added as an ARP target (so "intercept
+the MFP" works by just naming it), and the capture viewer's **"MFP only"**
+toggle / `host` filter narrows the packet list to traffic to/from that IP.
+
+### Multi-homed (printer LAN + internet) — `intercept.uplink_interface`
+
+For a man-in-the-middle that keeps the printer working, run the PC between two
+adapters: pick the **printer network adapter** (`intercept.interface`, the
+capture/ARP side) and the **internet adapter** (`intercept.uplink_interface`).
+With `ip_forward` on, printcap enables IPv4 forwarding so the MFP's traffic is
+routed toward the uplink.
+
+> **Different subnets need NAT.** IP forwarding alone routes between the two
+> adapters; if the printer LAN and the internet are different subnets, the PC
+> must also **NAT** the printer's traffic out the internet adapter. printcap does
+> not auto-configure NAT (Windows needs Internet Connection Sharing or RRAS):
+> enable **ICS** on the internet adapter and share it to the printer adapter.
+
+### Cleanup on stop
+
+Stopping capture (Stop in the capture window, disabling intercept, or quitting)
+tears the interceptor down in a safe order: it restores every poisoned host's ARP
+cache, then restores IPv4 forwarding to its prior state (printcap only disables
+forwarding if it enabled it). Nothing it changed is left behind.
+
 ### Viewing captures
 
 Two windows show the captured packets with the same live view, filtering, and

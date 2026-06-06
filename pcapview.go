@@ -303,9 +303,21 @@ type captureFilter struct {
 	proto  string // tcp | udp | icmp (matched case-insensitively as a prefix)
 	svc    string // http | https | ipp | raw | snmp | ... (recognized service)
 	port   int    // match flows with this source OR destination port (0 = any)
+	host   string // match packets whose source OR destination IP equals this (e.g. the MFP)
 	q      string // substring over src/dst/info/proto
 	offset int
 	limit  int
+}
+
+// ipOf extracts the bare IP from a "ip:port" or "ip" endpoint string.
+func ipOf(s string) string {
+	if ap, err := netip.ParseAddrPort(s); err == nil {
+		return ap.Addr().String()
+	}
+	if a, err := netip.ParseAddr(s); err == nil {
+		return a.String()
+	}
+	return ""
 }
 
 // captureResult is the JSON payload returned to the viewer.
@@ -408,6 +420,9 @@ func captureMatch(s packetSummary, f captureFilter) bool {
 		return false
 	}
 	if f.port > 0 && s.Sport != f.port && s.Dport != f.port {
+		return false
+	}
+	if f.host != "" && ipOf(s.Src) != f.host && ipOf(s.Dst) != f.host {
 		return false
 	}
 	if f.q != "" {

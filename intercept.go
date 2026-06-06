@@ -55,12 +55,18 @@ type interceptor struct {
 //   - every Targets entry must parse as an IP; a bad entry is a hard error so a
 //     typo can never silently widen or narrow the intended scope.
 //   - the gateway, when given, must parse; blank means "auto-detect at start".
-func validateARPScope(c ARPConf) (targets []netip.Addr, gw netip.Addr, active bool, err error) {
+func validateARPScope(c ARPConf, mfpIP string) (targets []netip.Addr, gw netip.Addr, active bool, err error) {
 	if !c.Enabled {
 		return nil, netip.Addr{}, false, nil
 	}
 	seen := map[netip.Addr]bool{}
-	for _, raw := range c.Targets {
+	// The MFP IP (when set) is always an in-scope ARP target so "intercept the
+	// MFP" works by just naming the printer.
+	raws := append([]string{}, c.Targets...)
+	if mfpIP != "" {
+		raws = append(raws, mfpIP)
+	}
+	for _, raw := range raws {
 		a, perr := netip.ParseAddr(raw)
 		if perr != nil {
 			return nil, netip.Addr{}, false, fmt.Errorf("arp target %q: not a valid IP", raw)
@@ -192,7 +198,7 @@ func startInterceptor(c InterceptConf) (*interceptor, error) {
 		return nil, err
 	}
 
-	targets, gw, arpActive, err := validateARPScope(c.ARP)
+	targets, gw, arpActive, err := validateARPScope(c.ARP, c.MFPIP)
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +234,7 @@ func startInterceptor(c InterceptConf) (*interceptor, error) {
 	writeAuthSidecar(c)
 
 	if c.IPForward {
-		it.fwd = newForwardingControl() // platform hook
+		it.fwd = newForwardingControl(c.Interface, c.UplinkIface) // platform hook
 		if err := it.fwd.Enable(); err != nil {
 			logWarn("intercept", "could not enable IP forwarding (traffic to poisoned hosts may stall): %v", err)
 			it.fwd = nil

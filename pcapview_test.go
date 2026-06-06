@@ -168,6 +168,20 @@ func TestCarveAllPorts(t *testing.T) {
 	}
 }
 
+func TestCaptureFilterByHost(t *testing.T) {
+	frames := [][]byte{
+		ethIPv4TCP("10.0.0.1", "10.0.0.9", 5000, 9100, 1, tcpFlagACK, []byte("to-mfp")),
+		ethIPv4TCP("10.0.0.9", "10.0.0.1", 9100, 5000, 1, tcpFlagACK, []byte("from-mfp")),
+		ethIPv4TCP("10.0.0.2", "10.0.0.3", 5000, 9100, 1, tcpFlagACK, []byte("unrelated")),
+	}
+	path := writeTestPcap(t, frames)
+	// host=10.0.0.9 (the MFP) matches the two packets to/from it, not the third.
+	r, _ := capturePackets(path, captureFilter{host: "10.0.0.9", limit: 100})
+	if r.Matched != 2 {
+		t.Fatalf("host filter matched=%d, want 2", r.Matched)
+	}
+}
+
 func TestFrameIsIPv6(t *testing.T) {
 	eth := make([]byte, 54)
 	eth[12], eth[13] = 0x86, 0xdd // IPv6 ethertype
