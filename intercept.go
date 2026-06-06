@@ -294,6 +294,10 @@ func (it *interceptor) pump() {
 			if ts.IsZero() {
 				ts = time.Now()
 			}
+			// Drop IPv6 entirely (pcap, live view, and carve) when disabled.
+			if it.conf.DisableIPv6 && frameIsIPv6(it.src.LinkType(), p.data) {
+				continue
+			}
 			if err := it.pw.writePacket(ts, p.data); err != nil {
 				logErr("intercept", "pcap write failed, stopping capture: %v", err)
 				return

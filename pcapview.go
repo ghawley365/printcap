@@ -31,11 +31,32 @@ type packetSummary struct {
 	Dst   string `json:"dst"`
 	Sport int    `json:"sport,omitempty"`
 	Dport int    `json:"dport,omitempty"`
-	Proto string `json:"proto"`         // TCP | UDP | ICMP | ICMPv6 | IPv4 | IPv6 | non-IP
-	Svc   string `json:"svc,omitempty"` // recognized service by port (http/https/ipp/raw/...)
-	Len   int    `json:"len"`           // captured frame length
-	Info  string `json:"info"`          // human-readable summary
-	Class string `json:"class"`         // reset | syn | fin | error | data | other (drives color)
+	Proto string `json:"proto"`           // TCP | UDP | ICMP | ICMPv6 | IPv4 | IPv6 | non-IP
+	Svc   string `json:"svc,omitempty"`   // recognized service by port (http/https/ipp/raw/...)
+	Len   int    `json:"len"`             // captured frame length
+	Info  string `json:"info"`            // human-readable summary
+	Class string `json:"class"`           // reset | syn | fin | error | data | other
+	Color string `json:"color,omitempty"` // red | green | blue — UI row color
+}
+
+// packetColor maps a packet to a viewer row color:
+//   - red:   errors and resets
+//   - green: print jobs (raw/9100, LPR, IPP) and SNMP
+//   - blue:  HTTPS (443)
+//
+// "" means default (no special color). Errors/resets take priority over service.
+func packetColor(class, svc string) string {
+	switch class {
+	case "reset", "error":
+		return "red"
+	}
+	switch svc {
+	case "raw", "lpr", "ipp", "snmp":
+		return "green"
+	case "https":
+		return "blue"
+	}
+	return ""
 }
 
 // portService names the application/API protocol of a well-known port so the
@@ -178,6 +199,7 @@ func dissectSummary(linkType int, frame []byte) packetSummary {
 		s.Src, s.Dst = src.String(), dst.String()
 		s.Info = fmt.Sprintf("IP protocol %d", proto)
 	}
+	s.Color = packetColor(s.Class, s.Svc)
 	return s
 }
 
@@ -363,7 +385,7 @@ func followStream(path string, a, b netip.AddrPort) (ab, ba []byte, parsed int, 
 	// Both ports are in scope so both directions (dst=b and dst=a) reassemble; the
 	// flowKey separates them by full 4-tuple.
 	ports := map[uint16]bool{a.Port(): true, b.Port(): true}
-	re := newStreamReassembler(ports, maxFollowBytes, 0, func(fs *flowState) {
+	re := newStreamReassembler(ports, false, maxFollowBytes, 0, func(fs *flowState) {
 		collected[flowKey{src: fs.src, dst: fs.dst}] = fs.buf
 	})
 	for _, p := range data.packets {

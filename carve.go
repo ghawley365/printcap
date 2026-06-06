@@ -39,7 +39,7 @@ func newCarver(c CarveConf, link int, save func(*job)) *carver {
 	}
 	idle := time.Duration(c.IdleFlushSec) * time.Second
 	cv := &carver{link: link, save: save}
-	cv.re = newStreamReassembler(ports, maxFlow, idle, cv.onStream)
+	cv.re = newStreamReassembler(ports, c.AllPorts, maxFlow, idle, cv.onStream)
 	return cv
 }
 

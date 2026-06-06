@@ -37,6 +37,7 @@ type flowState struct {
 // assembled bytes when it completes (FIN/RST), goes idle, or is flushed.
 type streamReassembler struct {
 	ports    map[uint16]bool
+	allPorts bool          // reassemble every destination port (ignores ports)
 	maxFlow  int           // per-flow byte cap (0 = unlimited)
 	idle     time.Duration // flush a flow this long after its last segment (0 = never)
 	flows    map[flowKey]*flowState
@@ -44,13 +45,14 @@ type streamReassembler struct {
 	latestTS time.Time // newest timestamp seen, drives idle sweeps
 }
 
-func newStreamReassembler(ports map[uint16]bool, maxFlow int, idle time.Duration, emit func(*flowState)) *streamReassembler {
+func newStreamReassembler(ports map[uint16]bool, allPorts bool, maxFlow int, idle time.Duration, emit func(*flowState)) *streamReassembler {
 	return &streamReassembler{
-		ports:   ports,
-		maxFlow: maxFlow,
-		idle:    idle,
-		flows:   map[flowKey]*flowState{},
-		emit:    emit,
+		ports:    ports,
+		allPorts: allPorts,
+		maxFlow:  maxFlow,
+		idle:     idle,
+		flows:    map[flowKey]*flowState{},
+		emit:     emit,
 	}
 }
 
@@ -65,8 +67,8 @@ func seqAfter(a, b uint32) bool { return int32(a-b) > 0 }
 
 // consume feeds one parsed segment, stamped ts, into the reassembler.
 func (r *streamReassembler) consume(seg l4Segment, ts time.Time) {
-	if !r.ports[seg.dst.Port()] {
-		return // not a flow toward a print port; ignore (and ignore the return path)
+	if !r.allPorts && !r.ports[seg.dst.Port()] {
+		return // not a flow toward a carve port; ignore (and ignore the return path)
 	}
 	if ts.After(r.latestTS) {
 		r.latestTS = ts

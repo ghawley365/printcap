@@ -854,9 +854,14 @@ pipeline as the live listeners, so documents land as typed files (`.jpg`, `.pcl`
 | Field | Default | Meaning |
 |---|---|---|
 | `enabled` | `true` | Reconstruct files from captured streams. |
-| `ports` | `[9100, 515, 631]` | Destination print ports to reassemble. |
+| `all_ports` | `true` | Reassemble **every** TCP port (authorized capture). Untick to use `ports`. |
+| `ports` | `[9100, 515, 631, 80, 8080]` | Ports to reassemble when `all_ports` is off. |
 | `max_stream_mb` | `256` | Per-stream size cap. |
 | `idle_flush_sec` | `10` | Flush a stream idle this long. |
+
+`intercept.disable_ipv6` (default off) drops IPv6 frames from the capture, the
+carving, and the live view — IPv4 only. Useful to cut IPv6 multicast / neighbor-
+discovery noise.
 
 ### Active ARP positioning (`intercept.arp`) — fail-closed
 
@@ -875,6 +880,8 @@ TCP stream reassembly:
   packet table, and double-click-to-follow-stream. It shows packets only when the
   engine runs **in-process** (this GUI), not when printcap runs as the installed
   **service** (a separate process) — use the dashboard on the service host then.
+  Color coding: **errors & resets = red**, **print jobs (raw/9100, LPR, IPP) &
+  SNMP = green**, **HTTPS (443) = blue**.
 * **Dashboard "Captures" panel** — the same, reachable from any browser. See §12.
 
 ---

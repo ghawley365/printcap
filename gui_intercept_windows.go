@@ -24,6 +24,8 @@ var (
 	uiIntEnabled    *walk.CheckBox
 	uiIntIface      *walk.ComboBox
 	uiIntPromisc    *walk.CheckBox
+	uiIntNoV6       *walk.CheckBox
+	uiIntCarveAll   *walk.CheckBox
 	uiIntAck        *walk.CheckBox
 	uiIntOperator   *walk.LineEdit
 	uiIntEngagement *walk.LineEdit
@@ -108,6 +110,7 @@ func captureTab() dec.TabPage {
 					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiIntEnabled, Text: "Enable network interception", OnClicked: onEnableInterceptClicked},
 					dec.Label{Text: "Capture adapter:"}, dec.ComboBox{AssignTo: &uiIntIface, Model: labels},
 					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiIntPromisc, Text: "Promiscuous mode"},
+					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiIntNoV6, Text: "Disable IPv6 (capture IPv4 only)"},
 				},
 			},
 			dec.GroupBox{
@@ -125,7 +128,8 @@ func captureTab() dec.TabPage {
 				Layout: dec.Grid{Columns: 2},
 				Children: []dec.Widget{
 					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiIntCarveEn, Text: "Reconstruct print + HTTP/API jobs from captured streams"},
-					dec.Label{Text: "Ports (comma-separated):"}, dec.LineEdit{AssignTo: &uiIntCarvePorts},
+					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiIntCarveAll, Text: "Reconstruct ALL ports (not just the list below)"},
+					dec.Label{Text: "Ports (when not all):"}, dec.LineEdit{AssignTo: &uiIntCarvePorts},
 				},
 			},
 			dec.GroupBox{
@@ -164,6 +168,8 @@ func applyInterceptUI() {
 	cfg.Intercept.Enabled = uiIntEnabled.Checked()
 	cfg.Intercept.Interface = ifaceFromCombo(captureDevs, uiIntIface.CurrentIndex())
 	cfg.Intercept.Promiscuous = uiIntPromisc.Checked()
+	cfg.Intercept.DisableIPv6 = uiIntNoV6.Checked()
+	cfg.Intercept.Carve.AllPorts = uiIntCarveAll.Checked()
 	cfg.Intercept.Authorization.Acknowledged = uiIntAck.Checked()
 	cfg.Intercept.Authorization.Operator = strings.TrimSpace(uiIntOperator.Text())
 	cfg.Intercept.Authorization.Engagement = strings.TrimSpace(uiIntEngagement.Text())
@@ -182,6 +188,8 @@ func refreshInterceptUI() {
 	uiIntEnabled.SetChecked(cfg.Intercept.Enabled)
 	uiIntIface.SetCurrentIndex(ifaceIndexFor(captureDevs, cfg.Intercept.Interface))
 	uiIntPromisc.SetChecked(cfg.Intercept.Promiscuous)
+	uiIntNoV6.SetChecked(cfg.Intercept.DisableIPv6)
+	uiIntCarveAll.SetChecked(cfg.Intercept.Carve.AllPorts)
 	uiIntAck.SetChecked(cfg.Intercept.Authorization.Acknowledged)
 	uiIntOperator.SetText(cfg.Intercept.Authorization.Operator)
 	uiIntEngagement.SetText(cfg.Intercept.Authorization.Engagement)
@@ -245,21 +253,20 @@ func (m *packetTableModel) Value(row, col int) interface{} {
 	return ""
 }
 
-// StyleCell color-codes rows by class (resets red, ICMP errors amber, ...).
+// StyleCell color-codes rows: red = errors/resets, green = print jobs + SNMP,
+// blue = HTTPS (443). Matches the packetSummary.Color computed by the dissector.
 func (m *packetTableModel) StyleCell(style *walk.CellStyle) {
 	i := style.Row()
 	if i < 0 || i >= len(m.rows) {
 		return
 	}
-	switch m.rows[i].Class {
-	case "reset":
-		style.TextColor = walk.RGB(0xf8, 0x51, 0x49)
-	case "error":
-		style.TextColor = walk.RGB(0xc7, 0x8a, 0x00)
-	case "syn":
-		style.TextColor = walk.RGB(0x1a, 0x7f, 0x37)
-	case "fin", "other":
-		style.TextColor = walk.RGB(0x8b, 0x94, 0x9e)
+	switch m.rows[i].Color {
+	case "red":
+		style.TextColor = walk.RGB(0xd7, 0x3a, 0x49) // readable red on white
+	case "green":
+		style.TextColor = walk.RGB(0x1a, 0x7f, 0x37) // light/medium green
+	case "blue":
+		style.TextColor = walk.RGB(0x1f, 0x6f, 0xeb) // light blue
 	}
 }
 

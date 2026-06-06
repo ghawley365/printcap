@@ -93,6 +93,13 @@ func stepToL3(linkType int, frame []byte) (ethertype uint16, l3 []byte, ok bool)
 	}
 }
 
+// frameIsIPv6 reports whether a captured frame carries an IPv6 packet (used to
+// drop IPv6 from capture when intercept.disable_ipv6 is set).
+func frameIsIPv6(linkType int, frame []byte) bool {
+	et, _, ok := stepToL3(linkType, frame)
+	return ok && et == etherTypeIPv6
+}
+
 func parseTCPSegment(linkType int, frame []byte) (seg l4Segment, ok bool) {
 	ethertype, l3, ok := stepToL3(linkType, frame)
 	if !ok {

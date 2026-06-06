@@ -89,11 +89,9 @@ const dashboardHTML = `<!doctype html>
   #capTable.live thead th{position:sticky;top:0;background:var(--panel);}
   .svc{background:var(--line);color:var(--accent);border-radius:3px;padding:0 5px;font-size:11px;}
   #capLiveStat{align-self:center;color:var(--good);font-weight:600;}
-  tr.cap-reset td{color:var(--bad);font-weight:600;}
-  tr.cap-error td{color:#e3b341;font-weight:600;}
-  tr.cap-syn td{color:var(--good);}
-  tr.cap-fin td{color:var(--muted);}
-  tr.cap-other td{color:var(--muted);}
+  tr.pc-red td{color:#f85149;font-weight:600;}
+  tr.pc-green td{color:#3fb950;}
+  tr.pc-blue td{color:#58a6ff;}
   .caplegend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;margin:0 0 10px;}
   .caplegend span{display:inline-flex;align-items:center;gap:5px;}
   .caplegend i{width:10px;height:10px;border-radius:2px;display:inline-block;}
@@ -129,11 +127,9 @@ const dashboardHTML = `<!doctype html>
   <div class="panel" id="capturePanel" style="display:none;">
     <h2>Network capture <span class="muted" id="capInfo"></span></h2>
     <div class="caplegend">
-      <span><i style="background:var(--bad)"></i>reset (RST)</span>
-      <span><i style="background:#e3b341"></i>ICMP error</span>
-      <span><i style="background:var(--good)"></i>SYN (connect)</span>
-      <span><i style="background:var(--muted)"></i>FIN / other</span>
-      <span><i style="background:var(--fg)"></i>data</span>
+      <span><i style="background:#f85149"></i>errors &amp; resets</span>
+      <span><i style="background:#3fb950"></i>print jobs &amp; SNMP</span>
+      <span><i style="background:#58a6ff"></i>HTTPS (443)</span>
       <span class="muted">· click a TCP row to follow/reassemble its stream</span>
     </div>
     <div class="controls">
@@ -472,7 +468,8 @@ function capFilters(p){
 function svcTag(s){return s?(' <span class="svc">'+esc(s)+'</span>'):'';}
 function capRowHTML(x){
   var follow=(x.proto==='TCP'&&x.src&&x.dst)?(' data-a="'+esc(x.src)+'" data-b="'+esc(x.dst)+'" title="click: follow TCP stream"'):'';
-  return '<tr class="cap-'+esc(x.class)+'"'+follow+'>'
+  var cls=x.color?(' class="pc-'+esc(x.color)+'"'):'';
+  return '<tr'+cls+follow+'>'
     +'<td>'+x.no+'</td><td>'+esc(x.time)+'</td><td>'+esc(x.proto)+svcTag(x.svc)+'</td>'
     +'<td>'+esc(x.src||'—')+'</td><td>'+esc(x.dst||'—')+'</td>'
     +'<td>'+esc(x.len)+'</td><td>'+esc(x.info)+'</td></tr>';

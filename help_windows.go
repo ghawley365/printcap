@@ -624,8 +624,11 @@ ENABLING
 WHAT IT DOES
 - Writes ALL traffic on the capture interface to a standard capture.pcap in the
   output folder (Wireshark/tshark can open it).
-- Reconstructs print AND API jobs from the traffic into typed files
-  (.pcl/.ps/.pdf/.jpg, and HTTP) on ports 9100, 515, 631, 80, and 8080.
+- Reconstructs streams into typed files (.pcl/.ps/.pdf/.jpg, and HTTP). By
+  default it carves ALL ports ("Reconstruct ALL ports"); untick it to limit
+  carving to the listed print/API ports (9100, 515, 631, 80, 8080).
+- "Disable IPv6" drops IPv6 from the capture, carving, and the live view (IPv4
+  only) — handy to cut IPv6 multicast/neighbor-discovery noise.
 - Writes capture.pcap.authorization.txt next to the pcap recording WHO ran the
   capture and under what engagement.
 
@@ -647,8 +650,9 @@ Two places show the captured packets, with the same live view + reassembly:
   clear / auto-scroll; shows "missed N" if a burst overruns the buffer).
   "Refresh (static)" instead reads the saved pcap.
 - FILTER by free text, port, service (HTTP/EWS, HTTPS, IPP, raw/9100, LPR, SNMP,
-  SMB, WSD, mDNS), packet class (RST / ICMP error / SYN / FIN / data), and
-  protocol. Resets and ICMP errors are color-coded.
+  SMB, WSD, mDNS), packet class, and protocol.
+- COLOR CODING: errors and resets are RED; print jobs (raw/9100, LPR, IPP) and
+  SNMP are GREEN; HTTPS (443) is BLUE.
 - FOLLOW STREAM: click any TCP row to reassemble both directions (client->server
   and server->client), viewable as text or hex. HTTP renders as text, so the
   printer's WEB API (EWS/REST) and IPP exchanges are readable. Each direction and

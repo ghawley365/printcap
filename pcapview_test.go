@@ -110,6 +110,75 @@ func TestDissectICMPError(t *testing.T) {
 	}
 }
 
+func TestPacketColor(t *testing.T) {
+	cases := []struct{ class, svc, want string }{
+		{"reset", "raw", "red"}, {"error", "", "red"},
+		{"data", "raw", "green"}, {"data", "ipp", "green"}, {"syn", "snmp", "green"},
+		{"data", "https", "blue"},
+		{"data", "http", ""}, {"other", "", ""},
+	}
+	for _, c := range cases {
+		if got := packetColor(c.class, c.svc); got != c.want {
+			t.Errorf("packetColor(%q,%q)=%q want %q", c.class, c.svc, got, c.want)
+		}
+	}
+}
+
+func TestDissectAssignsColor(t *testing.T) {
+	// 443 -> blue
+	if s := dissectSummary(linkTypeEthernet, ethIPv4TCP("10.0.0.1", "10.0.0.2", 5000, 443, 1, tcpFlagACK, []byte("x"))); s.Color != "blue" {
+		t.Fatalf("443 color=%q want blue", s.Color)
+	}
+	// 9100 data -> green
+	if s := dissectSummary(linkTypeEthernet, ethIPv4TCP("10.0.0.1", "10.0.0.2", 5000, 9100, 1, tcpFlagACK, []byte("x"))); s.Color != "green" {
+		t.Fatalf("9100 color=%q want green", s.Color)
+	}
+	// RST on a print port -> red (reset beats service)
+	if s := dissectSummary(linkTypeEthernet, ethIPv4TCP("10.0.0.2", "10.0.0.1", 9100, 5000, 1, tcpFlagRST, nil)); s.Color != "red" {
+		t.Fatalf("rst color=%q want red", s.Color)
+	}
+}
+
+func TestCarveAllPorts(t *testing.T) {
+	frames := [][]byte{
+		ethIPv4TCP("10.0.0.1", "10.0.0.9", 40000, 12345, 1, tcpFlagSYN, nil),
+		ethIPv4TCP("10.0.0.1", "10.0.0.9", 40000, 12345, 2, 0, []byte("ARBITRARY")),
+		ethIPv4TCP("10.0.0.1", "10.0.0.9", 40000, 12345, 11, tcpFlagFIN, nil),
+	}
+	ts := time.Unix(1, 0)
+	// AllPorts: an unlisted port (12345) IS carved.
+	var got []*job
+	cv := newCarver(CarveConf{Enabled: true, AllPorts: true}, linkTypeEthernet, func(j *job) { got = append(got, j) })
+	for _, f := range frames {
+		cv.consume(f, ts)
+	}
+	cv.flush()
+	if len(got) != 1 || string(got[0].data) != "ARBITRARY" {
+		t.Fatalf("all-ports carve = %v", got)
+	}
+	// Targeted: the same unlisted port is NOT carved.
+	var got2 []*job
+	cv2 := newCarver(CarveConf{Enabled: true, Ports: []int{9100}}, linkTypeEthernet, func(j *job) { got2 = append(got2, j) })
+	for _, f := range frames {
+		cv2.consume(f, ts)
+	}
+	cv2.flush()
+	if len(got2) != 0 {
+		t.Fatalf("targeted carve should skip unlisted port, got %d", len(got2))
+	}
+}
+
+func TestFrameIsIPv6(t *testing.T) {
+	eth := make([]byte, 54)
+	eth[12], eth[13] = 0x86, 0xdd // IPv6 ethertype
+	if !frameIsIPv6(linkTypeEthernet, eth) {
+		t.Fatal("IPv6 frame not detected")
+	}
+	if frameIsIPv6(linkTypeEthernet, ethIPv4TCP("10.0.0.1", "10.0.0.2", 1, 2, 1, tcpFlagACK, nil)) {
+		t.Fatal("IPv4 frame misdetected as IPv6")
+	}
+}
+
 func TestFollowStreamReassemblesBothDirections(t *testing.T) {
 	// A two-way conversation: client 10.0.0.1:5000 <-> server 10.0.0.9:9100.
 	frames := [][]byte{

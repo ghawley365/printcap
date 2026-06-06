@@ -65,12 +65,13 @@ type Config struct {
 // active poisoning even when ARP.Enabled is true (fail-closed by default).
 type InterceptConf struct {
 	Enabled     bool   `json:"enabled"`
-	Interface   string `json:"interface"`   // capture NIC: Npcap device name or friendly name; blank = auto
-	PcapFile    string `json:"pcap_file"`   // output libpcap path; blank = "<out_dir>/capture.pcap"
-	BPF         string `json:"bpf"`         // optional libpcap capture filter ("" = everything)
-	SnapLen     int    `json:"snaplen"`     // bytes captured per frame (0 = full frame)
-	Promiscuous bool   `json:"promiscuous"` // put the NIC in promiscuous mode
-	IPForward   bool   `json:"ip_forward"`  // enable OS IP forwarding while active (restored on stop)
+	Interface   string `json:"interface"`    // capture NIC: Npcap device name or friendly name; blank = auto
+	PcapFile    string `json:"pcap_file"`    // output libpcap path; blank = "<out_dir>/capture.pcap"
+	BPF         string `json:"bpf"`          // optional libpcap capture filter ("" = everything)
+	SnapLen     int    `json:"snaplen"`      // bytes captured per frame (0 = full frame)
+	Promiscuous bool   `json:"promiscuous"`  // put the NIC in promiscuous mode
+	IPForward   bool   `json:"ip_forward"`   // enable OS IP forwarding while active (restored on stop)
+	DisableIPv6 bool   `json:"disable_ipv6"` // drop IPv6 frames from capture/carve/view (IPv4 only)
 
 	Authorization AuthorizationConf `json:"authorization"`
 	Carve         CarveConf         `json:"carve"`
@@ -84,7 +85,8 @@ type InterceptConf struct {
 // land as typed files (.jpg, .pcl, .ps, .pdf, …) in addition to the raw pcap.
 type CarveConf struct {
 	Enabled      bool  `json:"enabled"`        // reconstruct files from captured streams
-	Ports        []int `json:"ports"`          // print ports to reassemble (dst port)
+	AllPorts     bool  `json:"all_ports"`      // reassemble EVERY TCP port (ignores Ports)
+	Ports        []int `json:"ports"`          // print ports to reassemble (dst port) when AllPorts is false
 	MaxStreamMB  int   `json:"max_stream_mb"`  // per-stream memory/size cap (0 = unlimited)
 	IdleFlushSec int   `json:"idle_flush_sec"` // flush a stream idle this long (0 = only on FIN/RST/stop)
 }
@@ -471,10 +473,10 @@ func defaultConfig() *Config {
 				Expiry:       "",
 			},
 			Carve: CarveConf{
-				Enabled: true, // on by default so intercept yields typed files, not just a pcap
-				// raw/JetDirect, LPR/LPD, IPP, and the printer's HTTP management/API
-				// ports (EWS/REST) so API traffic is reassembled too. 443/HTTPS is
-				// captured to the pcap but not carved (TLS-encrypted).
+				Enabled:  true, // on by default so intercept yields typed files, not just a pcap
+				AllPorts: true, // reconstruct streams on EVERY port (authorized capture)
+				// Fallback port list used when AllPorts is turned off: raw/JetDirect,
+				// LPR/LPD, IPP, and the printer's HTTP management/API ports (EWS/REST).
 				Ports:        []int{9100, 515, 631, 80, 8080},
 				MaxStreamMB:  256,
 				IdleFlushSec: 10,

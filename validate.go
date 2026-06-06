@@ -122,8 +122,8 @@ func validateIntercept(c *Config) []configIssue {
 		})
 	}
 
-	// Carve enabled but with no ports reconstructs nothing — likely a mistake.
-	if c.Intercept.Carve.Enabled && len(c.Intercept.Carve.Ports) == 0 {
+	// Carve enabled but with no ports (and not all-ports) reconstructs nothing.
+	if c.Intercept.Carve.Enabled && !c.Intercept.Carve.AllPorts && len(c.Intercept.Carve.Ports) == 0 {
 		issues = append(issues, configIssue{
 			Severity: sevWarning, Field: "intercept.carve.ports",
 			Message: "stream carving is enabled but no ports are listed",
