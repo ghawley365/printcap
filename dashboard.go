@@ -225,6 +225,9 @@ func apiCapturePacket(w http.ResponseWriter, r *http.Request) {
 		}
 		d := dissectDetail(link, rec.data)
 		d.No, d.Len = no, rec.origLen
+		if rec.origLen > len(rec.data) { // live ring keeps only header bytes
+			d.Hex += "\n(showing first " + strconv.Itoa(len(rec.data)) + " of " + strconv.Itoa(rec.origLen) + " bytes — download the .pcap for the full payload)\n"
+		}
 		writeJSON(w, &d)
 		return
 	}

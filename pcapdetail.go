@@ -83,10 +83,14 @@ func (d *packetDetail) decodeL2(linkType int, frame []byte) (uint16, []byte) {
 		d.add("Loopback (DLT_NULL)", fld("Address family", "0x%08x", binary.LittleEndian.Uint32(frame[0:4])))
 	default:
 		onWire := binary.BigEndian.Uint16(frame[12:14])
+		etField := fld("EtherType", "0x%04x (%s)", onWire, etherTypeName(onWire))
+		if onWire != et { // VLAN/QinQ-tagged: show the outer tag → resolved inner type
+			etField = fld("EtherType", "0x%04x (%s) → 0x%04x (%s)", onWire, etherTypeName(onWire), et, etherTypeName(et))
+		}
 		d.add("Ethernet II",
 			fld("Destination", "%s", net.HardwareAddr(frame[0:6])),
 			fld("Source", "%s", net.HardwareAddr(frame[6:12])),
-			fld("EtherType", "0x%04x (%s)", onWire, etherTypeName(onWire)))
+			etField)
 	}
 	return et, l3
 }
@@ -114,8 +118,11 @@ func (d *packetDetail) decodeIPv4(ip []byte) (byte, []byte) {
 		return proto, nil
 	}
 	end := len(ip)
-	if total >= ihl && total <= len(ip) {
-		end = total
+	switch {
+	case total >= ihl && total <= len(ip):
+		end = total // trust the total-length field (incl. total==ihl → no payload)
+	case total > 0 && total < ihl:
+		end = ihl // malformed: total below the header → no L4 payload (don't carve the tail)
 	}
 	return proto, ip[ihl:end]
 }

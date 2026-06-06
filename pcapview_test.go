@@ -223,6 +223,35 @@ func TestDissectDetailTCP(t *testing.T) {
 	}
 }
 
+func TestDissectDetailVLAN(t *testing.T) {
+	// Wrap an Ethernet/IPv4/TCP frame in an 802.1Q VLAN tag (vid 5).
+	inner := ethIPv4TCP("10.0.0.1", "10.0.0.9", 4000, 9100, 1, tcpFlagACK, []byte("x"))
+	vlan := append(append(append([]byte{}, inner[:12]...), 0x81, 0x00, 0x00, 0x05), inner[12:]...)
+	d := dissectDetail(linkTypeEthernet, vlan)
+	et, ok := fieldVal(d, "Ethernet II", "EtherType")
+	if !ok || !strings.Contains(et, "VLAN") || !strings.Contains(et, "IPv4") {
+		t.Errorf("VLAN EtherType field = %q (want outer VLAN → inner IPv4)", et)
+	}
+	if _, ok := fieldVal(d, "Transmission Control Protocol", "Destination port"); !ok {
+		t.Error("VLAN-tagged TCP not decoded through to L4")
+	}
+}
+
+func TestDissectDetailMalformedIPv4(t *testing.T) {
+	// IPv4 header claiming total-length (8) below the header length (20) must not
+	// carve trailing bytes as L4 — and must never panic.
+	ip := make([]byte, 40)
+	ip[0] = 0x45        // version 4, IHL 5 (20 bytes)
+	ip[2], ip[3] = 0, 8 // total length = 8 (malformed: < IHL)
+	ip[9] = ipProtoTCP
+	eth := make([]byte, 14)
+	binary.BigEndian.PutUint16(eth[12:], etherTypeIPv4)
+	d := dissectDetail(linkTypeEthernet, append(eth, ip...))
+	if _, ok := fieldVal(d, "Transmission Control Protocol", "Source port"); ok {
+		t.Error("malformed total<ihl should not produce a bogus TCP layer")
+	}
+}
+
 func TestDissectDetailARP(t *testing.T) {
 	d := dissectDetail(linkTypeEthernet, ethARP(1, "10.0.0.1", "10.0.0.9"))
 	if v, _ := fieldVal(d, "Address Resolution Protocol", "Opcode"); v != "1 (request)" {
