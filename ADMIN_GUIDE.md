@@ -886,10 +886,23 @@ With `ip_forward` on, printcap enables IPv4 forwarding so the MFP's traffic is
 routed toward the uplink.
 
 > **Different subnets need NAT.** IP forwarding alone routes between the two
-> adapters; if the printer LAN and the internet are different subnets, the PC
-> must also **NAT** the printer's traffic out the internet adapter. printcap does
-> not auto-configure NAT (Windows needs Internet Connection Sharing or RRAS):
-> enable **ICS** on the internet adapter and share it to the printer adapter.
+> adapters; if the printer LAN and the internet are different subnets, the PC must
+> also **NAT** the printer's traffic out the internet adapter.
+
+**Auto-NAT via ICS.** Set the two **ICS connection names** on the Capture tab
+(`intercept.ics_public` = the internet connection, e.g. `Wi-Fi`;
+`intercept.ics_private` = the printer-side connection, e.g. `Ethernet`). printcap
+then enables Internet Connection Sharing on Start (via the HNetCfg COM API) and
+**disables it again on Stop** — no manual step. The same logic is available as
+standalone scripts: `scripts/ics-enable.ps1 -Public "Wi-Fi" -Private "Ethernet"`
+and `scripts/ics-disable.ps1` (run elevated).
+
+> **ICS caveat.** ICS forces the printer-side adapter to **192.168.137.1/24** with
+> its own DHCP+NAT. That fits the topology where **this PC is the printer's
+> router** (printer on a NIC you control). For an ARP-MITM on an *existing* LAN
+> where the printer keeps its real IP, ICS is the wrong tool — use **RRAS NAT**
+> (which preserves the LAN addressing) instead. Leave the ICS fields blank to skip
+> auto-NAT.
 
 ### Cleanup on stop
 

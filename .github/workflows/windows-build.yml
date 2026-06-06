@@ -85,4 +85,6 @@ jobs:
           path: |
             printcap.exe
             printcap-nocapture.exe
+            scripts/ics-enable.ps1
+            scripts/ics-disable.ps1
           if-no-files-found: error

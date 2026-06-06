@@ -159,12 +159,20 @@ const ipRouterKey = `HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters`
 type winForwarding struct {
 	printerIface string // adapter the printer/MFP is on (capture side)
 	uplinkIface  string // adapter with internet access (multi-homed); "" = single-homed
+	icsPublic    string // ICS internet connection name (friendly); "" = no auto-ICS
+	icsPrivate   string // ICS printer connection name (friendly)
 	prior        string // prior IPEnableRouter value: "0", "1", or "" (absent/unknown)
-	set          bool   // WE changed it (so Restore puts it back)
+	set          bool   // WE changed IPEnableRouter (so Restore puts it back)
+	icsSet       bool   // WE enabled ICS (so Restore disables it)
 }
 
-func newForwardingControl(printerIface, uplinkIface string) forwardingControl {
-	return &winForwarding{printerIface: printerIface, uplinkIface: uplinkIface}
+func newForwardingControl(c InterceptConf) forwardingControl {
+	return &winForwarding{
+		printerIface: c.Interface,
+		uplinkIface:  c.UplinkIface,
+		icsPublic:    c.ICSPublic,
+		icsPrivate:   c.ICSPrivate,
+	}
 }
 
 func (w *winForwarding) Enable() error {
@@ -179,18 +187,36 @@ func (w *winForwarding) Enable() error {
 	}
 	w.set = true
 	logWarn("intercept", "enabled global IP routing to relay the printer to the internet (printer=%q uplink=%q). "+
-		"IPEnableRouter takes full effect after a reboot or restarting the 'Routing and Remote Access' service; for an immediate transparent relay, enable per-interface forwarding / ICS. "+
-		"Different-subnet uplink also needs NAT — turn on Internet Connection Sharing on the internet adapter.",
+		"IPEnableRouter takes full effect after a reboot or restarting the 'Routing and Remote Access' service.",
 		w.printerIface, w.uplinkIface)
+
+	// Auto-NAT via Internet Connection Sharing when connection names are given.
+	if w.icsPublic != "" && w.icsPrivate != "" {
+		if err := enableICS(w.icsPublic, w.icsPrivate); err != nil {
+			logWarn("intercept", "could not enable ICS (%q -> %q): %v — set it up manually or check the names", w.icsPublic, w.icsPrivate, err)
+		} else {
+			w.icsSet = true
+			logInfo("intercept", "ICS enabled (%q -> %q); the printer adapter is now 192.168.137.1 with NAT to the internet", w.icsPublic, w.icsPrivate)
+		}
+	}
 	return nil
 }
 
 func (w *winForwarding) Restore() error {
-	if !w.set { // already on before us, or never set — nothing to undo
+	// Tear down ICS first, independent of the IPEnableRouter change (ICS may have
+	// been enabled even if routing was already on).
+	if w.icsSet {
+		if err := disableICS(); err != nil {
+			logWarn("intercept", "could not disable ICS on cleanup: %v", err)
+		} else {
+			logInfo("intercept", "ICS disabled (cleanup)")
+		}
+	}
+	if !w.set { // we didn't change IPEnableRouter — nothing more to undo
 		return nil
 	}
 	restore := w.prior
-	if restore == "" { // value was absent before; remove our addition by zeroing
+	if restore == "" { // value was absent before; reset to the default (disabled)
 		restore = "0"
 	}
 	if err := exec.Command("reg", "add", ipRouterKey, "/v", "IPEnableRouter", "/t", "REG_DWORD", "/d", restore, "/f").Run(); err != nil {

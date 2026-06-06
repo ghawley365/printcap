@@ -234,7 +234,7 @@ func startInterceptor(c InterceptConf) (*interceptor, error) {
 	writeAuthSidecar(c)
 
 	if c.IPForward {
-		it.fwd = newForwardingControl(c.Interface, c.UplinkIface) // platform hook
+		it.fwd = newForwardingControl(c) // platform hook
 		if err := it.fwd.Enable(); err != nil {
 			logWarn("intercept", "could not enable IP forwarding (traffic to poisoned hosts may stall): %v", err)
 			it.fwd = nil

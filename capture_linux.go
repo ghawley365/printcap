@@ -126,7 +126,7 @@ func openLiveSource(c InterceptConf) (packetSource, error) {
 }
 
 // newForwardingControl: passive capture needs no kernel forwarding on Linux.
-func newForwardingControl(printerIface, uplinkIface string) forwardingControl {
+func newForwardingControl(c InterceptConf) forwardingControl {
 	return noopForwarding{}
 }
 

@@ -68,6 +68,8 @@ type InterceptConf struct {
 	Interface   string `json:"interface"`        // capture NIC (the printer's network): Npcap device/friendly name; blank = auto
 	UplinkIface string `json:"uplink_interface"` // multi-homed: the adapter with internet access (blank = single-homed)
 	MFPIP       string `json:"mfp_ip"`           // the MFP/printer IP — ARP target + "MFP only" capture filter
+	ICSPublic   string `json:"ics_public"`       // Windows ICS: internet connection NAME (e.g. "Wi-Fi"); blank = no auto-ICS
+	ICSPrivate  string `json:"ics_private"`      // Windows ICS: printer-side connection NAME (e.g. "Ethernet")
 	PcapFile    string `json:"pcap_file"`        // output libpcap path; blank = "<out_dir>/capture.pcap"
 	BPF         string `json:"bpf"`              // optional libpcap capture filter ("" = everything)
 	SnapLen     int    `json:"snaplen"`          // bytes captured per frame (0 = full frame)

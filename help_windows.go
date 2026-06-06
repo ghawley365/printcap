@@ -645,9 +645,17 @@ that IP.
 MULTI-HOMED (printer LAN + internet)
 Pick the "Printer network adapter" (capture/ARP side) and the "Internet adapter
 (uplink)". With IP forwarding on, the PC routes the printer's traffic toward the
-uplink so it keeps working. NOTE: if the two are different subnets you must also
-enable NAT — turn on Internet Connection Sharing on the internet adapter and
-share it to the printer adapter (printcap can't auto-configure NAT).
+uplink so it keeps working.
+
+AUTO-NAT (ICS)
+Different-subnet uplinks also need NAT. Fill in the two "Auto-NAT (ICS)" fields
+with the Windows CONNECTION names (e.g. internet="Wi-Fi", printer="Ethernet").
+printcap then turns on Internet Connection Sharing at Start and turns it OFF
+again at Stop — no manual step. (Standalone scripts/ics-enable.ps1 and
+ics-disable.ps1 do the same by hand.) CAVEAT: ICS sets the printer-side adapter
+to 192.168.137.1 with its own DHCP+NAT; it suits "this PC is the printer's
+router". For a transparent MITM on an existing LAN, use RRAS NAT instead. Leave
+the ICS fields blank to skip auto-NAT.
 
 CLEANUP
 Stop (or quitting) restores every poisoned ARP cache and returns IPv4 forwarding

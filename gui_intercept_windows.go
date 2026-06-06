@@ -25,6 +25,8 @@ var (
 	uiIntIface      *walk.ComboBox
 	uiIntUplink     *walk.ComboBox
 	uiIntMFP        *walk.LineEdit
+	uiIntICSPub     *walk.LineEdit
+	uiIntICSPrv     *walk.LineEdit
 	uiIntPromisc    *walk.CheckBox
 	uiIntNoV6       *walk.CheckBox
 	uiIntCarveAll   *walk.CheckBox
@@ -117,6 +119,8 @@ func captureTab() dec.TabPage {
 					dec.Label{Text: "Printer network adapter:"}, dec.ComboBox{AssignTo: &uiIntIface, Model: labels},
 					dec.Label{Text: "Internet adapter (uplink):"}, dec.ComboBox{AssignTo: &uiIntUplink, Model: uplinkLabels},
 					dec.Label{Text: "MFP / printer IP:"}, dec.LineEdit{AssignTo: &uiIntMFP, ToolTipText: "the printer's IP — used as the ARP target and the 'MFP only' capture filter"},
+					dec.Label{Text: "Auto-NAT (ICS) internet conn.:"}, dec.LineEdit{AssignTo: &uiIntICSPub, ToolTipText: "Windows connection NAME with internet, e.g. \"Wi-Fi\" — set both ICS fields to auto-enable Internet Connection Sharing (and clean it up on stop)"},
+					dec.Label{Text: "Auto-NAT (ICS) printer conn.:"}, dec.LineEdit{AssignTo: &uiIntICSPrv, ToolTipText: "Windows connection NAME on the printer side, e.g. \"Ethernet\". Note: ICS sets this adapter to 192.168.137.1"},
 					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiIntPromisc, Text: "Promiscuous mode"},
 					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiIntNoV6, Text: "Disable IPv6 (capture IPv4 only)"},
 				},
@@ -177,6 +181,8 @@ func applyInterceptUI() {
 	cfg.Intercept.Interface = ifaceFromCombo(captureDevs, uiIntIface.CurrentIndex())
 	cfg.Intercept.UplinkIface = ifaceFromCombo(captureDevs, uiIntUplink.CurrentIndex())
 	cfg.Intercept.MFPIP = strings.TrimSpace(uiIntMFP.Text())
+	cfg.Intercept.ICSPublic = strings.TrimSpace(uiIntICSPub.Text())
+	cfg.Intercept.ICSPrivate = strings.TrimSpace(uiIntICSPrv.Text())
 	cfg.Intercept.Promiscuous = uiIntPromisc.Checked()
 	cfg.Intercept.DisableIPv6 = uiIntNoV6.Checked()
 	cfg.Intercept.Carve.AllPorts = uiIntCarveAll.Checked()
@@ -199,6 +205,8 @@ func refreshInterceptUI() {
 	uiIntIface.SetCurrentIndex(ifaceIndexFor(captureDevs, cfg.Intercept.Interface))
 	uiIntUplink.SetCurrentIndex(ifaceIndexFor(captureDevs, cfg.Intercept.UplinkIface))
 	uiIntMFP.SetText(cfg.Intercept.MFPIP)
+	uiIntICSPub.SetText(cfg.Intercept.ICSPublic)
+	uiIntICSPrv.SetText(cfg.Intercept.ICSPrivate)
 	uiIntPromisc.SetChecked(cfg.Intercept.Promiscuous)
 	uiIntNoV6.SetChecked(cfg.Intercept.DisableIPv6)
 	uiIntCarveAll.SetChecked(cfg.Intercept.Carve.AllPorts)

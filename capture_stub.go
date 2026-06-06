@@ -20,7 +20,7 @@ func openLiveSource(c InterceptConf) (packetSource, error) {
 }
 
 // newForwardingControl returns an inert controller.
-func newForwardingControl(printerIface, uplinkIface string) forwardingControl {
+func newForwardingControl(c InterceptConf) forwardingControl {
 	return noopForwarding{}
 }
 
