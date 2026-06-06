@@ -511,6 +511,7 @@ func pumpCaptureRows() {
 			f.host = a.String() // "MFP only" → show just traffic to/from the printer
 		}
 	}
+	added := 0
 	for i, rec := range recs {
 		s := dissectSummary(link, rec.data)
 		s.No = int(firstNo) + i
@@ -519,15 +520,29 @@ func pumpCaptureRows() {
 		if captureMatch(s, f) {
 			captureModel.rows = append(captureModel.rows, s)
 			captureModel.frames = append(captureModel.frames, append([]byte(nil), rec.data...))
+			added++
 		}
 	}
+	trimmed := 0
 	if len(captureModel.rows) > 5000 {
-		captureModel.rows = captureModel.rows[len(captureModel.rows)-5000:]
-		captureModel.frames = captureModel.frames[len(captureModel.frames)-5000:]
+		trimmed = len(captureModel.rows) - 5000
+		captureModel.rows = captureModel.rows[trimmed:]
+		captureModel.frames = captureModel.frames[trimmed:]
 	}
-	captureModel.PublishRowsReset()
-	if n := len(captureModel.rows); n > 0 {
-		captureTV.EnsureItemVisible(n - 1) // auto-scroll
+	// Only refresh the table when something actually changed, and preserve the
+	// user's row selection across the refresh (so "Packet details" works while
+	// capturing). Auto-scroll to the newest row only when nothing is selected.
+	if added > 0 || trimmed > 0 {
+		sel := captureTV.CurrentIndex()
+		captureModel.PublishRowsReset()
+		if sel >= 0 {
+			if ns := sel - trimmed; ns >= 0 && ns < len(captureModel.rows) {
+				captureTV.SetCurrentIndex(ns)
+				captureTV.EnsureItemVisible(ns)
+			}
+		} else if n := len(captureModel.rows); n > 0 {
+			captureTV.EnsureItemVisible(n - 1)
+		}
 	}
 	seq, _ := captureLive.stats()
 	status := fmt.Sprintf("Capturing — %d packets seen, %d shown", seq, len(captureModel.rows))
