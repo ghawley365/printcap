@@ -12,7 +12,12 @@ name: Windows build (live capture / Npcap)
 on:
   workflow_dispatch:
   push:
+    branches: ["main"]
     tags: ["v*"]
+    # Skip doc-only pushes so we don't rebuild for README/guide edits.
+    paths-ignore:
+      - "**.md"
+      - "planning/**"
 
 permissions:
   contents: read
