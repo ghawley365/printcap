@@ -304,6 +304,15 @@ func (it *interceptor) pump() {
 			if it.conf.DisableIPv6 && frameIsIPv6(it.src.LinkType(), p.data) {
 				continue
 			}
+			// Cross-platform capture-time display filter: drop non-matching frames
+			// before they reach the pcap, live ring, or carver.
+			if it.conf.CaptureFilter != "" {
+				cs := dissectSummary(it.src.LinkType(), p.data)
+				cs.Len = len(p.data)
+				if !matchExpr(cs, it.conf.CaptureFilter) {
+					continue
+				}
+			}
 			if err := it.pw.writePacket(ts, p.data); err != nil {
 				logErr("intercept", "pcap write failed, stopping capture: %v", err)
 				return

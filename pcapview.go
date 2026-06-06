@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/netip"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -346,6 +347,8 @@ type captureFilter struct {
 	host   string // match packets whose source OR destination IP equals this (e.g. the MFP)
 	noV6   bool   // hide IPv6 packets from the view
 	q      string // Wireshark-lite display-filter expression (see matchExpr)
+	sort   string // sort column: no(default) | time | proto | src | dst | len
+	desc   bool   // descending order
 	offset int
 	limit  int
 }
@@ -527,6 +530,7 @@ func capturePackets(path string, f captureFilter) (*captureResult, error) {
 		}
 	}
 	res.Matched = len(matched)
+	sortPackets(matched, f.sort, f.desc)
 	lo := f.offset
 	if lo < 0 {
 		lo = 0
@@ -540,6 +544,35 @@ func capturePackets(path string, f captureFilter) (*captureResult, error) {
 	}
 	res.Packets = matched[lo:hi]
 	return res, nil
+}
+
+// sortPackets stably sorts the matched packets by a column. "no"/"" keeps capture
+// order (No ascending). desc reverses.
+func sortPackets(p []packetSummary, by string, desc bool) {
+	if by == "" || by == "no" {
+		if desc {
+			sort.SliceStable(p, func(i, j int) bool { return p[i].No > p[j].No })
+		}
+		return // already in No order otherwise
+	}
+	less := func(i, j int) bool { return p[i].No < p[j].No }
+	switch by {
+	case "time":
+		less = func(i, j int) bool { return p[i].No < p[j].No } // No tracks capture time
+	case "proto":
+		less = func(i, j int) bool { return p[i].Proto < p[j].Proto }
+	case "src":
+		less = func(i, j int) bool { return p[i].Src < p[j].Src }
+	case "dst":
+		less = func(i, j int) bool { return p[i].Dst < p[j].Dst }
+	case "len":
+		less = func(i, j int) bool { return p[i].Len < p[j].Len }
+	}
+	if desc {
+		inner := less
+		less = func(i, j int) bool { return inner(j, i) }
+	}
+	sort.SliceStable(p, less)
 }
 
 // maxFollowBytes caps each direction of a reassembled stream returned to the

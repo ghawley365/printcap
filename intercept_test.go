@@ -163,6 +163,29 @@ func TestStartInterceptorRefusesUnauthorized(t *testing.T) {
 // TestInterceptorPumpWritesPcap drives the platform-neutral pump loop with an
 // in-memory source and asserts the frames land in a readable pcap file. This is
 // the loopback-style acceptance test for the capture pipeline minus the OS hook.
+func TestInterceptorCaptureFilter(t *testing.T) {
+	dir := t.TempDir()
+	pw, err := newPcapFile(filepath.Join(dir, "f.pcap"), 0, linkTypeEthernet)
+	if err != nil {
+		t.Fatalf("newPcapFile: %v", err)
+	}
+	ts := time.Unix(1, 0)
+	src := newSliceSource(linkTypeEthernet, []capturedPacket{
+		{ts: ts, data: ethIPv4TCP("10.0.0.1", "10.0.0.2", 1, 80, 1, tcpFlagACK, []byte("x"))}, // matches proto==tcp
+		{ts: ts, data: []byte{0xaa, 0xbb, 0xcc}},                                              // non-IP, dropped
+	})
+	it := &interceptor{conf: InterceptConf{CaptureFilter: "proto==tcp"}, src: src, pw: pw, done: make(chan struct{})}
+	it.wg.Add(1)
+	go func() { defer it.wg.Done(); it.pump() }()
+	time.Sleep(20 * time.Millisecond)
+	if err := it.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if pkts, _ := pw.stats(); pkts != 1 {
+		t.Fatalf("captured %d packets, want 1 (capture filter should drop the non-TCP frame)", pkts)
+	}
+}
+
 func TestInterceptorPumpWritesPcap(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "out.pcap")

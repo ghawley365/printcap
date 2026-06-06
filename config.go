@@ -64,18 +64,19 @@ type Config struct {
 // be scoped to an explicit target allow-list; an empty allow-list disables
 // active poisoning even when ARP.Enabled is true (fail-closed by default).
 type InterceptConf struct {
-	Enabled     bool   `json:"enabled"`
-	Interface   string `json:"interface"`        // capture NIC (the printer's network): Npcap device/friendly name; blank = auto
-	UplinkIface string `json:"uplink_interface"` // multi-homed: the adapter with internet access (blank = single-homed)
-	MFPIP       string `json:"mfp_ip"`           // the MFP/printer IP — ARP target + "MFP only" capture filter
-	ICSPublic   string `json:"ics_public"`       // Windows ICS: internet connection NAME (e.g. "Wi-Fi"); blank = no auto-ICS
-	ICSPrivate  string `json:"ics_private"`      // Windows ICS: printer-side connection NAME (e.g. "Ethernet")
-	PcapFile    string `json:"pcap_file"`        // output libpcap path; blank = "<out_dir>/capture.pcap"
-	BPF         string `json:"bpf"`              // capture-time libpcap filter — WINDOWS/Npcap ONLY (ignored on macOS/Linux; use the viewer's display filter there)
-	SnapLen     int    `json:"snaplen"`          // bytes captured per frame (0 = full frame)
-	Promiscuous bool   `json:"promiscuous"`      // put the NIC in promiscuous mode
-	IPForward   bool   `json:"ip_forward"`       // enable OS IP forwarding while active (restored on stop)
-	DisableIPv6 bool   `json:"disable_ipv6"`     // drop IPv6 frames from capture/carve/view (IPv4 only)
+	Enabled       bool   `json:"enabled"`
+	Interface     string `json:"interface"`        // capture NIC (the printer's network): Npcap device/friendly name; blank = auto
+	UplinkIface   string `json:"uplink_interface"` // multi-homed: the adapter with internet access (blank = single-homed)
+	MFPIP         string `json:"mfp_ip"`           // the MFP/printer IP — ARP target + "MFP only" capture filter
+	ICSPublic     string `json:"ics_public"`       // Windows ICS: internet connection NAME (e.g. "Wi-Fi"); blank = no auto-ICS
+	ICSPrivate    string `json:"ics_private"`      // Windows ICS: printer-side connection NAME (e.g. "Ethernet")
+	PcapFile      string `json:"pcap_file"`        // output libpcap path; blank = "<out_dir>/capture.pcap"
+	BPF           string `json:"bpf"`              // capture-time libpcap filter — WINDOWS/Npcap ONLY (ignored on macOS/Linux; use the viewer's display filter there)
+	CaptureFilter string `json:"capture_filter"`   // cross-platform capture-time display filter (same syntax as the viewer); "" = capture everything
+	SnapLen       int    `json:"snaplen"`          // bytes captured per frame (0 = full frame)
+	Promiscuous   bool   `json:"promiscuous"`      // put the NIC in promiscuous mode
+	IPForward     bool   `json:"ip_forward"`       // enable OS IP forwarding while active (restored on stop)
+	DisableIPv6   bool   `json:"disable_ipv6"`     // drop IPv6 frames from capture/carve/view (IPv4 only)
 
 	Authorization AuthorizationConf `json:"authorization"`
 	Carve         CarveConf         `json:"carve"`

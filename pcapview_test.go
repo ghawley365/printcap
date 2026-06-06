@@ -190,6 +190,35 @@ func TestMatchExpr(t *testing.T) {
 	}
 }
 
+func TestSortPackets(t *testing.T) {
+	mk := func() []packetSummary {
+		return []packetSummary{{No: 1, Len: 300, Proto: "UDP"}, {No: 2, Len: 100, Proto: "TCP"}, {No: 3, Len: 200, Proto: "ARP"}}
+	}
+	p := mk()
+	sortPackets(p, "len", false)
+	if p[0].Len != 100 || p[2].Len != 300 {
+		t.Fatalf("len asc: %+v", p)
+	}
+	sortPackets(p, "len", true)
+	if p[0].Len != 300 || p[2].Len != 100 {
+		t.Fatalf("len desc: %+v", p)
+	}
+	p = mk()
+	sortPackets(p, "proto", false)
+	if p[0].Proto != "ARP" || p[2].Proto != "UDP" {
+		t.Fatalf("proto asc: %+v", p)
+	}
+	p = []packetSummary{{No: 3}, {No: 1}, {No: 2}}
+	sortPackets(p, "no", false)
+	if p[0].No != 3 { // "no" ascending is a no-op (assumes capture order); only desc reorders
+		t.Fatalf("no asc should not reorder: %+v", p)
+	}
+	sortPackets(p, "no", true)
+	if p[0].No != 3 || p[2].No != 1 {
+		t.Fatalf("no desc: %+v", p)
+	}
+}
+
 func TestNoV6Filter(t *testing.T) {
 	if captureMatch(packetSummary{IPVer: 6}, captureFilter{noV6: true}) {
 		t.Fatal("IPv6 should be hidden when noV6 is set")

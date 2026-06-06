@@ -29,6 +29,7 @@ var (
 	uiIntICSPrv     *walk.ComboBox
 	uiIntPromisc    *walk.CheckBox
 	uiIntNoV6       *walk.CheckBox
+	uiIntCapFilter  *walk.LineEdit
 	uiIntCarveAll   *walk.CheckBox
 	uiIntAck        *walk.CheckBox
 	uiIntOperator   *walk.LineEdit
@@ -123,6 +124,7 @@ func captureTab() dec.TabPage {
 					dec.Label{Text: "Auto-NAT (ICS) printer conn.:"}, dec.ComboBox{AssignTo: &uiIntICSPrv, Editable: true, Model: connectionNames(), ToolTipText: "Windows connection on the printer side, e.g. \"Ethernet\". Note: ICS sets this adapter to 192.168.137.1"},
 					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiIntPromisc, Text: "Promiscuous mode"},
 					dec.Label{Text: ""}, dec.CheckBox{AssignTo: &uiIntNoV6, Text: "Disable IPv6 (capture IPv4 only)"},
+					dec.Label{Text: "Capture filter (record only):"}, dec.LineEdit{AssignTo: &uiIntCapFilter, ToolTipText: "optional — record only matching packets to the pcap, e.g. addr==10.0.0.50 or port==9100 (same syntax as the viewer; blank = capture everything)"},
 				},
 			},
 			dec.GroupBox{
@@ -185,6 +187,7 @@ func applyInterceptUI() {
 	cfg.Intercept.ICSPrivate = strings.TrimSpace(uiIntICSPrv.Text())
 	cfg.Intercept.Promiscuous = uiIntPromisc.Checked()
 	cfg.Intercept.DisableIPv6 = uiIntNoV6.Checked()
+	cfg.Intercept.CaptureFilter = strings.TrimSpace(uiIntCapFilter.Text())
 	cfg.Intercept.Carve.AllPorts = uiIntCarveAll.Checked()
 	cfg.Intercept.Authorization.Acknowledged = uiIntAck.Checked()
 	cfg.Intercept.Authorization.Operator = strings.TrimSpace(uiIntOperator.Text())
@@ -209,6 +212,7 @@ func refreshInterceptUI() {
 	uiIntICSPrv.SetText(cfg.Intercept.ICSPrivate)
 	uiIntPromisc.SetChecked(cfg.Intercept.Promiscuous)
 	uiIntNoV6.SetChecked(cfg.Intercept.DisableIPv6)
+	uiIntCapFilter.SetText(cfg.Intercept.CaptureFilter)
 	uiIntCarveAll.SetChecked(cfg.Intercept.Carve.AllPorts)
 	uiIntAck.SetChecked(cfg.Intercept.Authorization.Acknowledged)
 	uiIntOperator.SetText(cfg.Intercept.Authorization.Operator)

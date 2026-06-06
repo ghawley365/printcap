@@ -73,6 +73,9 @@ captures the raw spool data sent to it, answers SNMP discovery like a real
 device, and shows a live web dashboard of everything it catches.
 
 QUICK START
+New to printcap? The "Quick Start" tab is the simple view: status, a big
+Start/Stop, and one-click buttons for the dashboard, capture window, folder, and
+this help. Everything below is the detailed (advanced) path through the tabs.
 1. On the "Protocols & Ports" tab, enable the protocols you need and set ports.
 2. On "General", choose a capture directory and a save mode.
 3. Click Start. Send a print job to this machine's IP address.
@@ -629,6 +632,9 @@ WHAT IT DOES
   carving to the listed print/API ports (9100, 515, 631, 80, 8080).
 - "Disable IPv6" drops IPv6 from the capture, carving, and the live view (IPv4
   only) — handy to cut IPv6 multicast/neighbor-discovery noise.
+- A capture-time filter (intercept.capture_filter, same syntax as the viewer's
+  display filter, e.g. "addr==10.0.0.50" or "port==9100") keeps the pcap small by
+  recording only matching packets — works on every platform.
 - Writes capture.pcap.authorization.txt next to the pcap recording WHO ran the
   capture and under what engagement.
 

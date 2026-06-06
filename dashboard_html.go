@@ -143,7 +143,18 @@ Examples:
       <span><i style="background:#f85149"></i>errors &amp; resets</span>
       <span><i style="background:#3fb950"></i>print jobs &amp; SNMP</span>
       <span><i style="background:#58a6ff"></i>HTTPS (443)</span>
-      <span class="muted">· click a TCP row to follow/reassemble its stream</span>
+      <span class="muted">· click a TCP row to follow/reassemble its stream · click an IP to filter to it</span>
+    </div>
+    <div class="controls" id="capPresets">
+      <span class="muted" style="align-self:center;">Quick filters:</span>
+      <button data-q="">All</button>
+      <button data-q="port==9100">Print (9100)</button>
+      <button data-q="svc==ipp">IPP</button>
+      <button data-q="svc==http">Web / API</button>
+      <button data-q="proto==arp">ARP</button>
+      <button data-q="class==reset">Resets</button>
+      <button data-q="class==error">ICMP errors</button>
+      <button data-q="svc==snmp">SNMP</button>
     </div>
     <div class="controls">
       <input id="capQ" class="grow" placeholder="filter: dst==10.0.0.5  port==9100  proto==arp  ipver!=6  len>100  svc==http  (space=AND)">
@@ -469,7 +480,7 @@ function startSSE(){
 }
 
 // ---- network capture viewer (static + live) ----
-var capState={q:'',port:'',host:'',svc:'',cls:'',proto:'',nov6:false,offset:0,limit:500,matched:0,
+var capState={q:'',port:'',host:'',svc:'',cls:'',proto:'',nov6:false,sort:'',order:'asc',offset:0,limit:500,matched:0,
               live:false,paused:false,cursor:0,rows:[],dropped:0,timer:null};
 
 function capFilters(p){
@@ -480,7 +491,21 @@ function capFilters(p){
   if(capState.cls)p.set('class',capState.cls);
   if(capState.proto)p.set('proto',capState.proto);
   if(capState.nov6)p.set('nov6','1');
+  if(capState.sort){p.set('sort',capState.sort);p.set('order',capState.order);}
   return p;
+}
+// Client-side sort for the live view (the live ring is chronological; this keeps
+// the displayed rows ordered when a column header is active).
+function capSortRows(rows){
+  if(!capState.sort)return rows;
+  var k=capState.sort, num=(k==='len'||k==='no');
+  var r=rows.slice().sort(function(a,b){
+    var x=(k==='time')?a.no:a[k], y=(k==='time')?b.no:b[k];
+    if(num){x=Number(x)||0;y=Number(y)||0;return x-y;}
+    return String(x||'').localeCompare(String(y||''));
+  });
+  if(capState.order==='desc')r.reverse();
+  return r;
 }
 function svcTag(s){return s?(' <span class="svc">'+esc(s)+'</span>'):'';}
 function ipPart(s){if(!s)return '';if(s.charAt(0)==='['){return s.slice(1,s.indexOf(']'));}var i=s.lastIndexOf(':');return i>0?s.slice(0,i):s;}
@@ -493,11 +518,21 @@ function capRowHTML(x){
     +'<td>'+ipCell(x.src)+'</td><td>'+ipCell(x.dst)+'</td>'
     +'<td>'+esc(x.len)+'</td><td>'+esc(x.info)+'</td></tr>';
 }
+function capSortArrow(col){return capState.sort===col?(capState.order==='desc'?' ▼':' ▲'):'';}
 function capTableHTML(list){
-  return '<table class="cap"><thead><tr><th>#</th><th>Time</th><th>Proto</th><th>Source</th><th>Destination</th><th>Len</th><th>Info</th></tr></thead><tbody>'
+  var cols=[['no','#'],['time','Time'],['proto','Proto'],['src','Source'],['dst','Destination'],['len','Len'],['','Info']];
+  var head=cols.map(function(c){return c[0]?('<th class="sortable" data-sort="'+c[0]+'">'+c[1]+capSortArrow(c[0])+'</th>'):'<th>'+c[1]+'</th>';}).join('');
+  return '<table class="cap"><thead><tr>'+head+'</tr></thead><tbody>'
     +list.map(capRowHTML).join('')+'</tbody></table>';
 }
 function capAttachFollow(){
+  Array.prototype.forEach.call(document.querySelectorAll('#capTable th.sortable'),function(th){
+    th.onclick=function(){
+      var c=th.getAttribute('data-sort');
+      if(capState.sort===c){capState.order=(capState.order==='desc')?'asc':'desc';}else{capState.sort=c;capState.order='asc';}
+      if(capState.live){renderLive();}else{capState.offset=0;loadCapture();}
+    };
+  });
   Array.prototype.forEach.call(document.querySelectorAll('#capTable tr[data-a]'),function(tr){
     tr.onclick=function(){openStream(tr.getAttribute('data-a'),tr.getAttribute('data-b'));};
   });
@@ -528,7 +563,7 @@ function loadCapture(){
 // --- live mode ---
 function renderLive(){
   var c=document.getElementById('capTable');
-  c.innerHTML= capState.rows.length?capTableHTML(capState.rows):'<div class="empty">Waiting for packets… (start intercept mode on the capture interface)</div>';
+  c.innerHTML= capState.rows.length?capTableHTML(capSortRows(capState.rows)):'<div class="empty">Waiting for packets… (start intercept mode on the capture interface)</div>';
   capAttachFollow();
   if(document.getElementById('capAutoscroll').checked){c.scrollTop=c.scrollHeight;}
 }
@@ -586,6 +621,9 @@ document.getElementById('capSvc').addEventListener('change',function(){capState.
 document.getElementById('capClass').addEventListener('change',function(){capState.cls=this.value;capFilterChanged();});
 document.getElementById('capProto').addEventListener('change',function(){capState.proto=this.value;capFilterChanged();});
 document.getElementById('capNoV6').addEventListener('change',function(){capState.nov6=this.checked;capFilterChanged();});
+Array.prototype.forEach.call(document.querySelectorAll('#capPresets button'),function(b){
+  b.onclick=function(){var q=b.getAttribute('data-q');capState.q=q;document.getElementById('capQ').value=q;capFilterChanged();};
+});
 document.getElementById('capHelpToggle').onclick=function(e){e.preventDefault();
   var h=document.getElementById('capHelp');var show=h.style.display==='none';
   h.style.display=show?'':'none';this.textContent=show?'hide filter help ▴':'show filter help ▾';};

@@ -1037,6 +1037,13 @@ inspect, export, and prune captures, plus control listeners and the engine.
   * **Row types** — TCP/UDP/ICMP are decoded; **ARP** rows show who-has/is-at
     (common during ARP positioning); **non-IP** rows are other L2 frames with the
     EtherType in the Info column.
+  * **Quick filters** — one-click presets (Print 9100, IPP, Web/API, ARP, Resets,
+    ICMP errors, SNMP) fill the filter box; **click any IP** to filter to that
+    address; **click a column header** to sort.
+  * **Capture-time filter** — `intercept.capture_filter` (same display-filter
+    syntax) records only matching packets to the pcap, on every platform — use it
+    to keep long captures small. `intercept.bpf` is the Windows/Npcap-only
+    libpcap-syntax equivalent.
   * **Follow TCP stream** — click any TCP row to reassemble both directions
     (client→server / server→client) with an auto/text/hex view; HTTP shows as
     text, so **printer web-API (EWS/REST) and IPP exchanges are readable**. Each

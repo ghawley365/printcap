@@ -92,6 +92,8 @@ func apiCapture(w http.ResponseWriter, r *http.Request) {
 		host:   normHost(q.Get("host")),
 		noV6:   q.Get("nov6") != "",
 		q:      q.Get("q"),
+		sort:   q.Get("sort"),
+		desc:   strings.EqualFold(q.Get("order"), "desc"),
 		offset: atoiDefault(q.Get("offset"), 0),
 		limit:  atoiDefault(q.Get("limit"), 500),
 	}

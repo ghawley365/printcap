@@ -39,6 +39,10 @@ var (
 	uiStartStop *walk.PushButton
 	uiSvcStatus *walk.Label
 
+	// Quick Start (Simple) tab
+	uiQuickStatus    *walk.Label
+	uiQuickStartStop *walk.PushButton
+
 	uiOut    *walk.LineEdit
 	uiSave   *walk.ComboBox
 	uiMaxJob *walk.NumberEdit
@@ -252,6 +256,7 @@ func buildWindow() error {
 			},
 			dec.TabWidget{
 				Pages: []dec.TabPage{
+					quickStartTab(),
 					generalTab(),
 					protocolsTab(),
 					rawLprTab(),
@@ -279,6 +284,46 @@ func buildWindow() error {
 			},
 		},
 	}.Create()
+}
+
+// quickStartTab is the simple landing page for non-technical operators: status,
+// big start/stop, and one-click access to the dashboard and the packet-capture
+// window. All the detailed settings live in the other (Advanced) tabs.
+func quickStartTab() dec.TabPage {
+	return dec.TabPage{
+		Title:  "Quick Start",
+		Layout: dec.VBox{},
+		Children: []dec.Widget{
+			dec.Label{Text: "printcap captures print jobs (and, in intercept mode, network traffic) so you can inspect them."},
+			dec.GroupBox{
+				Title:  "Status",
+				Layout: dec.VBox{},
+				Children: []dec.Widget{
+					dec.Label{AssignTo: &uiQuickStatus, Text: "…"},
+				},
+			},
+			dec.GroupBox{
+				Title:  "Common actions",
+				Layout: dec.Grid{Columns: 2},
+				Children: []dec.Widget{
+					dec.PushButton{AssignTo: &uiQuickStartStop, Text: "Start", OnClicked: onStartStop},
+					dec.Label{Text: "Start or stop capturing print jobs."},
+					dec.PushButton{Text: "Open Dashboard", OnClicked: openDashboard},
+					dec.Label{Text: "Live web view: captured jobs, stats, packets."},
+					dec.PushButton{Text: "Open Capture Window ▸", OnClicked: showCaptureWindow},
+					dec.Label{Text: "Watch network packets live (intercept mode)."},
+					dec.PushButton{Text: "Open Capture Folder", OnClicked: openFolder},
+					dec.Label{Text: "Where captured files are saved."},
+					dec.PushButton{Text: "Save Settings", OnClicked: onSave},
+					dec.Label{Text: "Save your configuration to disk."},
+					dec.PushButton{Text: "Help", OnClicked: showHelp},
+					dec.Label{Text: "Plain-language guide to every feature."},
+				},
+			},
+			dec.Label{Text: "Need more options? Use the tabs to the right (Protocols, Capture, SNMP, …) — that's the advanced view."},
+			dec.VSpacer{},
+		},
+	}
 }
 
 func generalTab() dec.TabPage {
@@ -1210,12 +1255,22 @@ func updateStatus() {
 	if serviceInstalled() {
 		mode = "Windows service"
 	}
-	if engineRunning() {
-		uiStatus.SetText("● Running  (" + mode + ")")
-		uiStartStop.SetText("Stop")
-	} else {
-		uiStatus.SetText("○ Stopped  (" + mode + ")")
-		uiStartStop.SetText("Start")
+	running := engineRunning()
+	statusText, btn := "○ Stopped  ("+mode+")", "Start"
+	if running {
+		statusText, btn = "● Running  ("+mode+")", "Stop"
+	}
+	uiStatus.SetText(statusText)
+	uiStartStop.SetText(btn)
+	if uiQuickStatus != nil {
+		caps := ""
+		if running && cfg.Intercept.Enabled && interceptModule != nil {
+			caps = " · capturing packets"
+		}
+		uiQuickStatus.SetText(statusText + caps)
+	}
+	if uiQuickStartStop != nil {
+		uiQuickStartStop.SetText(btn)
 	}
 	uiSvcStatus.SetText("Service: " + serviceState())
 }
