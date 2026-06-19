@@ -12,6 +12,14 @@ and can **install itself as a Windows service** to run unattended at boot.
 
 No runtime, no installer, no dependencies — one `printcap.exe`.
 
+## Documentation
+
+- **[USER_GUIDE.md](USER_GUIDE.md)** — friendly, step-by-step guide for operators
+  (Quick Start, the dashboard, the capture window, filtering, packet details,
+  troubleshooting, glossary). Start here if you're *using* printcap.
+- **[ADMIN_GUIDE.md](ADMIN_GUIDE.md)** — full configuration reference, flags, and
+  deployment details for administrators.
+
 ## What it does
 
 | Capability | Default port | Notes |
