@@ -1,5 +1,7 @@
 # printcap — End-User Guide
 
+*Developed by Gary Hawley — gary.hawley@gmail.com*
+
 A friendly, step-by-step guide to using **printcap**, the network print-capture
 tool. This guide is written for the people who *operate* printcap day to day —
 no deep networking background required. Where something is genuinely technical,

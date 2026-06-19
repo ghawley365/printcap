@@ -1,5 +1,7 @@
 # printcap — Administrator Guide
 
+*Developed by Gary Hawley — gary.hawley@gmail.com*
+
 A complete operational reference for deploying, configuring, securing, and
 troubleshooting **printcap**, a self-contained network print-capture server for
 Windows.
