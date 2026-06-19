@@ -12,6 +12,10 @@ printcap.log
 # macOS
 .DS_Store
 
+# Editor/IDE local settings (personal, not source).
+.vscode/
+.idea/
+
 # Local backup/snapshot archives (not source).
 Archive.zip
 *.zip
